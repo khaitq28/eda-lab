@@ -1,0 +1,225 @@
+version: "3.9"
+
+services:
+  # ==========================================================================
+  # MESSAGE BROKER
+  # ==========================================================================
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: eda-rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - eda-network
+
+  # ==========================================================================
+  # DATABASES (One per service)
+  # ==========================================================================
+  postgres-ingestion:
+    image: postgres:16-alpine
+    container_name: eda-postgres-ingestion
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: ingestion_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_ingestion_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ingestion_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - eda-network
+
+  postgres-validation:
+    image: postgres:16-alpine
+    container_name: eda-postgres-validation
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_DB: validation_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_validation_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d validation_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - eda-network
+
+  postgres-enrichment:
+    image: postgres:16-alpine
+    container_name: eda-postgres-enrichment
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_DB: enrichment_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_enrichment_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d enrichment_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - eda-network
+
+  postgres-audit:
+    image: postgres:16-alpine
+    container_name: eda-postgres-audit
+    ports:
+      - "5436:5432"
+    environment:
+      POSTGRES_DB: audit_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_audit_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d audit_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - eda-network
+
+  # ==========================================================================
+  # SERVICES
+  # ==========================================================================
+  ingestion-service:
+    build:
+      context: .
+      dockerfile: ingestion-service/Dockerfile
+    container_name: eda-ingestion-service
+    ports:
+      - "8081:8081"
+    environment:
+      DB_HOST: postgres-ingestion
+      DB_PORT: 5432
+      DB_NAME: ingestion_db
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      SERVER_PORT: 8081
+    depends_on:
+      postgres-ingestion:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eda-network
+
+  validation-service:
+    build:
+      context: .
+      dockerfile: validation-service/Dockerfile
+    container_name: eda-validation-service
+    ports:
+      - "8082:8082"
+    environment:
+      DB_HOST: postgres-validation
+      DB_PORT: 5432
+      DB_NAME: validation_db
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      SERVER_PORT: 8082
+    depends_on:
+      postgres-validation:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eda-network
+
+  enrichment-service:
+    build:
+      context: .
+      dockerfile: enrichment-service/Dockerfile
+    container_name: eda-enrichment-service
+    ports:
+      - "8083:8083"
+    environment:
+      DB_HOST: postgres-enrichment
+      DB_PORT: 5432
+      DB_NAME: enrichment_db
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      SERVER_PORT: 8083
+    depends_on:
+      postgres-enrichment:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eda-network
+
+  audit-service:
+    build:
+      context: .
+      dockerfile: audit-service/Dockerfile
+    container_name: eda-audit-service
+    ports:
+      - "8084:8084"
+    environment:
+      DB_HOST: postgres-audit
+      DB_PORT: 5432
+      DB_NAME: audit_db
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      SERVER_PORT: 8084
+    depends_on:
+      postgres-audit:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eda-network
+
+# ==========================================================================
+# NETWORKS & VOLUMES
+# ==========================================================================
+networks:
+  eda-network:
+    driver: bridge
+
+volumes:
+  rabbitmq_data:
+  postgres_ingestion_data:
+  postgres_validation_data:
+  postgres_enrichment_data:
+  postgres_audit_data:
