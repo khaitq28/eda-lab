@@ -1,24 +1,22 @@
-# Build stage
-FROM eclipse-temurin:21-jdk-alpine AS builder
+# Build stage - Use official Maven image
+FROM maven:3.9.6-eclipse-temurin-21-alpine AS builder
 WORKDIR /app
 
-# Copy Maven wrapper and pom files
-COPY .mvn/ .mvn/
-COPY mvnw pom.xml ./
-COPY common/pom.xml common/
-COPY enrichment-service/pom.xml enrichment-service/
-
-# Download dependencies (cached layer)
-RUN ./mvnw dependency:go-offline -pl enrichment-service -am -B
-
-# Copy source code
+# Copy only common module (shared library)
+COPY common/pom.xml common/pom.xml
 COPY common/src common/src
+
+# Copy only enrichment service
+COPY enrichment-service/pom.xml enrichment-service/pom.xml
 COPY enrichment-service/src enrichment-service/src
 
-# Build the application
-RUN ./mvnw clean package -pl enrichment-service -am -DskipTests -B
+# Build common library first (install to local Maven repo in container)
+RUN mvn clean install -f common/pom.xml -DskipTests -B
 
-# Runtime stage
+# Build enrichment service
+RUN mvn clean package -f enrichment-service/pom.xml -DskipTests -B
+
+# Runtime stage - Minimal JRE image
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 

@@ -1,24 +1,22 @@
-# Build stage
-FROM eclipse-temurin:21-jdk-alpine AS builder
+# Build stage - Use official Maven image
+FROM maven:3.9.6-eclipse-temurin-21-alpine AS builder
 WORKDIR /app
 
-# Copy Maven wrapper and pom files
-COPY .mvn/ .mvn/
-COPY mvnw pom.xml ./
-COPY common/pom.xml common/
-COPY audit-service/pom.xml audit-service/
-
-# Download dependencies (cached layer)
-RUN ./mvnw dependency:go-offline -pl audit-service -am -B
-
-# Copy source code
+# Copy only common module (shared library)
+COPY common/pom.xml common/pom.xml
 COPY common/src common/src
+
+# Copy only audit service
+COPY audit-service/pom.xml audit-service/pom.xml
 COPY audit-service/src audit-service/src
 
-# Build the application
-RUN ./mvnw clean package -pl audit-service -am -DskipTests -B
+# Build common library first (install to local Maven repo in container)
+RUN mvn clean install -f common/pom.xml -DskipTests -B
 
-# Runtime stage
+# Build audit service
+RUN mvn clean package -f audit-service/pom.xml -DskipTests -B
+
+# Runtime stage - Minimal JRE image
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 

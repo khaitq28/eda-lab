@@ -1,11 +1,15 @@
 package com.eda.lab.common.event;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonSubTypes;
+import com.fasterxml.jackson.annotation.JsonTypeInfo;
+
 import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Base class for all integration events in the EDA system.
+ * Sealed base class for all integration events in the EDA system.
+ * Uses Java 21 sealed classes to restrict which events can exist in the system.
  * 
  * All events are immutable and contain:
  * - eventId: unique identifier for idempotency
@@ -13,35 +17,20 @@ import java.util.UUID;
  * - aggregateId: the document ID this event relates to
  * - timestamp: when the event was created
  */
-public abstract class BaseEvent {
+@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "eventType")
+@JsonSubTypes({
+    @JsonSubTypes.Type(value = DocumentUploadedEvent.class, name = EventTypes.DOCUMENT_UPLOADED),
+    @JsonSubTypes.Type(value = DocumentValidatedEvent.class, name = EventTypes.DOCUMENT_VALIDATED),
+    @JsonSubTypes.Type(value = DocumentRejectedEvent.class, name = EventTypes.DOCUMENT_REJECTED),
+    @JsonSubTypes.Type(value = DocumentEnrichedEvent.class, name = EventTypes.DOCUMENT_ENRICHED)
+})
+public sealed interface BaseEvent
+    permits DocumentUploadedEvent, DocumentValidatedEvent, DocumentRejectedEvent, DocumentEnrichedEvent {
 
-    private final UUID eventId;
-    private final String eventType;
-    private final UUID aggregateId;
+    UUID eventId();
+    String eventType();
+    UUID aggregateId();
     
     @JsonFormat(shape = JsonFormat.Shape.STRING)
-    private final Instant timestamp;
-
-    protected BaseEvent(UUID eventId, String eventType, UUID aggregateId, Instant timestamp) {
-        this.eventId = eventId;
-        this.eventType = eventType;
-        this.aggregateId = aggregateId;
-        this.timestamp = timestamp;
-    }
-
-    public UUID getEventId() {
-        return eventId;
-    }
-
-    public String getEventType() {
-        return eventType;
-    }
-
-    public UUID getAggregateId() {
-        return aggregateId;
-    }
-
-    public Instant getTimestamp() {
-        return timestamp;
-    }
+    Instant timestamp();
 }

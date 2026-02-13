@@ -157,6 +157,17 @@ All services use environment variables for configuration:
 | RABBITMQ_PASSWORD| guest      | RabbitMQ password        |
 | SERVER_PORT      | (varies)   | HTTP server port         |
 
+## Java 21 Features
+
+This project uses modern Java 21 features for clean, safe, and performant code:
+
+- ✅ **Records** - Immutable events and DTOs
+- ✅ **Sealed Classes** - Type-safe event hierarchy
+- ✅ **Pattern Matching** - Exhaustive event handling
+- ✅ **Virtual Threads** - High-throughput I/O operations
+
+See [JAVA21_FEATURES.md](JAVA21_FEATURES.md) for detailed examples and best practices.
+
 ## License
 
 This project is for educational purposes.
