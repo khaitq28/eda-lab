@@ -27,6 +27,28 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
+    # Connection settings
+    connection-timeout: 10s
+    requested-heartbeat: 30s
+    # Listener container settings
+    listener:
+      simple:
+        # Manual acknowledgment for fine-grained control (overridden to AUTO in config)
+        acknowledge-mode: auto
+        # Prefetch: Number of unacked messages per consumer
+        prefetch: 10
+        # Concurrency: Number of concurrent consumers
+        concurrency: 1
+        max-concurrency: 5
+        # Retry configuration (also configured programmatically in RabbitMQConfig)
+        retry:
+          enabled: true
+          initial-interval: 1000ms
+          max-attempts: 5
+          multiplier: 2.0
+          max-interval: 10000ms
+        # Default requeue rejected messages to false (use DLQ instead)
+        default-requeue-rejected: false
 
 server:
   port: ${SERVER_PORT:8082}
@@ -44,3 +66,5 @@ logging:
   level:
     com.eda.lab: DEBUG
     org.springframework.amqp: INFO
+    org.springframework.retry: DEBUG
+    org.springframework.transaction: DEBUG
