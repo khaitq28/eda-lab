@@ -62,7 +62,18 @@ management:
     health:
       show-details: always
 
+# Outbox Publisher Configuration
+outbox:
+  publisher:
+    enabled: true
+    polling-interval: 2s      # Poll every 2 seconds
+    batch-size: 50            # Process 50 events per batch
+    max-retries: 10           # Max retry attempts before marking as FAILED
+    initial-retry-delay: 10s  # Initial retry delay (exponential backoff)
+    max-retry-delay: 1h       # Max retry delay cap
+
 logging:
   level:
     com.eda.lab: DEBUG
     org.springframework.amqp: INFO
+    org.springframework.scheduling: INFO
