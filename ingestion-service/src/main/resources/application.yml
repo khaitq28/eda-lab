@@ -27,6 +27,28 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
+    # Publisher confirms for reliability (at-least-once delivery)
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    # Connection and channel timeouts
+    connection-timeout: 10s
+    # Template settings
+    template:
+      mandatory: true
+      retry:
+        enabled: true
+        initial-interval: 1s
+        max-attempts: 3
+        multiplier: 2
+    # Listener settings (for future consumers)
+    listener:
+      simple:
+        acknowledge-mode: manual
+        prefetch: 10
+        retry:
+          enabled: true
+          initial-interval: 2s
+          max-attempts: 3
 
 server:
   port: ${SERVER_PORT:8081}

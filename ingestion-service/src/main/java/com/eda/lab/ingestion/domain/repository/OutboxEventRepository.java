@@ -2,6 +2,7 @@ package com.eda.lab.ingestion.domain.repository;
 
 import com.eda.lab.ingestion.domain.entity.OutboxEvent;
 import com.eda.lab.ingestion.domain.entity.OutboxEvent.OutboxStatus;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
@@ -22,13 +23,14 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
      * Ordered by creation time for FIFO processing.
      * 
      * This will be used by the outbox publisher background job.
+     * Supports pagination for batch processing.
      */
     @Query("""
         SELECT e FROM OutboxEvent e 
         WHERE e.status = 'PENDING' 
         ORDER BY e.createdAt ASC
         """)
-    List<OutboxEvent> findPendingEvents();
+    List<OutboxEvent> findPendingEvents(Pageable pageable);
 
     /**
      * Find failed events ready for retry.
