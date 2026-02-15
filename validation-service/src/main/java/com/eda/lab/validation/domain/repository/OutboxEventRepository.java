@@ -1,9 +1,9 @@
 package com.eda.lab.validation.domain.repository;
 
 import com.eda.lab.validation.domain.entity.OutboxEvent;
-import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -41,38 +41,35 @@ import java.util.UUID;
 public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> {
 
     /**
-     * Find pending events ready to publish.
-     * Only returns events where nextRetryAt has passed (or is null).
-     * Orders by creation time for FIFO processing.
+     * Find pending events ready to publish with row-level locking.
+     * Uses FOR UPDATE SKIP LOCKED for multi-instance safety.
+     * 
+     * How it works:
+     * - Each instance locks different rows (SELECT FOR UPDATE)
+     * - If row is locked by another instance, SKIP it (SKIP LOCKED)
+     * - Prevents duplicate publishing in scaled deployments
+     * 
+     * Example with 3 instances:
+     * - Instance 1 locks rows 1-50
+     * - Instance 2 tries same rows → SKIPPED (busy)
+     * - Instance 2 locks rows 51-100 instead
+     * - Instance 3 locks rows 101-150
+     * - Result: Each instance processes different events ✅
      * 
      * @param now Current timestamp (to check if retry time has arrived)
-     * @param pageable Pagination (typically PageRequest.of(0, batchSize))
-     * @return List of pending events ready to publish
+     * @param limit Batch size
+     * @return List of pending events (locked by this instance)
      */
-    @Query("""
-        SELECT e FROM OutboxEvent e 
-        WHERE e.status = 'PENDING' 
-        AND (e.nextRetryAt IS NULL OR e.nextRetryAt <= :now)
-        ORDER BY e.createdAt ASC
-        """)
-    List<OutboxEvent> findPendingEvents(Instant now, Pageable pageable);
+    @Query(value = """
+        SELECT * FROM outbox_events 
+        WHERE status = 'PENDING' 
+        AND (next_retry_at IS NULL OR next_retry_at <= :now)
+        ORDER BY created_at ASC 
+        LIMIT :limit
+        FOR UPDATE SKIP LOCKED
+        """, nativeQuery = true)
+    List<OutboxEvent> findPendingEvents(@Param("now") Instant now, @Param("limit") int limit);
 
-    /**
-     * Find failed events ready for retry.
-     * Only returns events where next_retry_at has passed.
-     * 
-     * @param now Current timestamp
-     * @param pageable Pagination
-     * @return List of events ready for retry
-     */
-    @Query("""
-        SELECT e FROM OutboxEvent e 
-        WHERE e.status = 'FAILED' 
-        AND e.nextRetryAt IS NOT NULL 
-        AND e.nextRetryAt <= :now
-        ORDER BY e.nextRetryAt ASC
-        """)
-    List<OutboxEvent> findEventsReadyForRetry(Instant now, Pageable pageable);
 
     /**
      * Count events by status (for monitoring).

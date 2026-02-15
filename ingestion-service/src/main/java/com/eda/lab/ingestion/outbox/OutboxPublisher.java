@@ -13,8 +13,6 @@ import org.springframework.amqp.core.MessageBuilder;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,12 +36,11 @@ import java.util.List;
  * - Exponential backoff for retries
  * - Dead letter queue for permanently failed events
  * 
- * Concurrency Safety (Current Implementation):
- * - This implementation assumes a SINGLE instance of ingestion-service
- * - For multiple instances, you would need:
- *   1. SELECT FOR UPDATE SKIP LOCKED in the repository query
- *   2. Or distributed locking (Redis, DB advisory locks)
- *   3. Or leader election (Kubernetes leader election, Hazelcast)
+ * Concurrency Safety:
+ * - ✅ SAFE for multiple instances
+ * - Uses SELECT FOR UPDATE SKIP LOCKED in repository query
+ * - Each instance locks different rows → no duplicate publishing
+ * - PostgreSQL 9.5+ required (SKIP LOCKED support)
  * 
  * Production Improvements:
  * - Add metrics (published count, failed count, retry count)
@@ -83,9 +80,8 @@ public class OutboxPublisher {
         }
 
         try {
-            // Fetch batch of pending events
-            Pageable pageable = PageRequest.of(0, properties.getBatchSize());
-            List<OutboxEvent> pendingEvents = outboxEventRepository.findPendingEvents(Instant.now(), pageable);
+            // Fetch batch of pending events (with row-level locking for multi-instance safety)
+            List<OutboxEvent> pendingEvents = outboxEventRepository.findPendingEvents(Instant.now(), properties.getBatchSize());
 
             if (pendingEvents.isEmpty()) {
                 log.trace("No pending outbox events to publish");
@@ -283,27 +279,4 @@ public class OutboxPublisher {
         return error.length() > 500 ? error.substring(0, 500) + "..." : error;
     }
 
-    /**
-     * TODO: For multi-instance deployment, add this query to OutboxEventRepository:
-     * 
-     * @Query(value = """
-     *     SELECT * FROM outbox_events 
-     *     WHERE status = 'PENDING' 
-     *     OR (status = 'PENDING' AND next_retry_at <= NOW())
-     *     ORDER BY created_at ASC 
-     *     LIMIT :limit
-     *     FOR UPDATE SKIP LOCKED
-     *     """, nativeQuery = true)
-     * List<OutboxEvent> findPendingEventsWithLock(int limit);
-     * 
-     * The FOR UPDATE SKIP LOCKED ensures:
-     * - Each instance locks different events
-     * - No duplicate processing
-     * - No blocking between instances
-     * 
-     * Alternative approaches:
-     * 1. Distributed lock (Redis SETNX, DB advisory locks)
-     * 2. Partition by aggregate ID (each instance handles certain partitions)
-     * 3. Leader election (only leader publishes)
-     */
 }

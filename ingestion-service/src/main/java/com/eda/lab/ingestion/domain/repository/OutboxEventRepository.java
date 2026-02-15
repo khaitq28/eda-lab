@@ -2,9 +2,9 @@ package com.eda.lab.ingestion.domain.repository;
 
 import com.eda.lab.ingestion.domain.entity.OutboxEvent;
 import com.eda.lab.ingestion.domain.entity.OutboxEvent.OutboxStatus;
-import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -19,22 +19,28 @@ import java.util.UUID;
 public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> {
 
 
-    @Query("""
-        SELECT e FROM OutboxEvent e 
-        WHERE e.status = 'PENDING' 
-        AND (e.nextRetryAt IS NULL OR e.nextRetryAt <= :now)
-        ORDER BY e.createdAt ASC
-        """)
-    List<OutboxEvent> findPendingEvents(Instant now, Pageable pageable);
-
-    @Query("""
-        SELECT e FROM OutboxEvent e 
-        WHERE e.status = 'FAILED' 
-        AND e.nextRetryAt IS NOT NULL 
-        AND e.nextRetryAt <= :now
-        ORDER BY e.nextRetryAt ASC
-        """)
-    List<OutboxEvent> findEventsReadyForRetry(Instant now);
+    /**
+     * Find pending events ready to publish with row-level locking.
+     * Uses FOR UPDATE SKIP LOCKED for multi-instance safety.
+     * 
+     * How it works:
+     * - Each instance locks different rows
+     * - If row is locked by another instance, SKIP it
+     * - Prevents duplicate publishing in scaled deployments
+     * 
+     * @param now Current timestamp
+     * @param limit Batch size
+     * @return List of pending events (locked by this instance)
+     */
+    @Query(value = """
+        SELECT * FROM outbox_events 
+        WHERE status = 'PENDING' 
+        AND (next_retry_at IS NULL OR next_retry_at <= :now)
+        ORDER BY created_at ASC 
+        LIMIT :limit
+        FOR UPDATE SKIP LOCKED
+        """, nativeQuery = true)
+    List<OutboxEvent> findPendingEvents(@Param("now") Instant now, @Param("limit") int limit);
 
     List<OutboxEvent> findByAggregateIdOrderByCreatedAtAsc(UUID aggregateId);
 

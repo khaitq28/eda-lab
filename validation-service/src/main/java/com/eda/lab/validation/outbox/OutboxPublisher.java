@@ -8,8 +8,6 @@ import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageBuilder;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,9 +58,9 @@ public class OutboxPublisher {
     public void publishPendingEvents() {
         try {
             // Fetch batch of pending events (only those ready to publish)
-            Pageable pageable = PageRequest.of(0, BATCH_SIZE);
+            // Fetch batch of pending events (with row-level locking for multi-instance safety)
             Instant now = Instant.now();
-            List<OutboxEvent> pendingEvents = outboxEventRepository.findPendingEvents(now, pageable);
+            List<OutboxEvent> pendingEvents = outboxEventRepository.findPendingEvents(now, BATCH_SIZE);
 
             if (pendingEvents.isEmpty()) {
                 log.trace("No pending outbox events to publish");
