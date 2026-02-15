@@ -1,10 +1,13 @@
 package com.eda.lab.validation.messaging.consumer;
 
-import com.eda.lab.common.event.DocumentUploadedEvent;
+import com.eda.lab.common.event.*;
 import com.eda.lab.validation.config.RabbitMQConfig;
+import com.eda.lab.validation.domain.entity.OutboxEvent;
 import com.eda.lab.validation.domain.entity.ProcessedEvent;
+import com.eda.lab.validation.domain.repository.OutboxEventRepository;
 import com.eda.lab.validation.domain.repository.ProcessedEventRepository;
 import com.eda.lab.validation.messaging.exception.BusinessValidationException;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -49,6 +52,7 @@ import java.util.UUID;
 public class DocumentUploadedConsumer {
 
     private final ProcessedEventRepository processedEventRepository;
+    private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
 
     /**
@@ -128,18 +132,31 @@ public class DocumentUploadedConsumer {
             validateDocument(documentId, documentName, contentType);
 
             // ============================================================
-            // 5. Mark as Processed AFTER Successful Validation
+            // 5. Mark as Processed + Create Outbox Event (SAME TRANSACTION)
             // ============================================================
             
+            // 5.1. Mark as processed (idempotency)
             ProcessedEvent processedEvent = ProcessedEvent.of(eventId, eventType, aggregateId);
             processedEventRepository.save(processedEvent);
             
-            log.info("Document VALIDATED and marked as processed: eventId={}, documentId={}", 
-                    eventId, documentId);
+            // 5.2. Create DocumentValidated event
+            DocumentValidatedEvent validatedEvent = DocumentValidatedEvent.create(
+                    documentId,
+                    "Document passed all validation rules",
+                    "validation-service"
+            );
             
-            // TODO: Emit DocumentValidated event (next step)
+            // 5.3. Save to outbox (will be published by OutboxPublisher)
+            OutboxEvent outboxEvent = createOutboxEvent(validatedEvent, documentId);
+            outboxEventRepository.save(outboxEvent);
             
-            // Transaction commits here (both processed_event insert and validation success)
+            log.info("Document VALIDATED: eventId={}, documentId={}, outboxEventId={}", 
+                    eventId, documentId, validatedEvent.eventId());
+            
+            // Transaction commits here:
+            // - processed_events: 1 row inserted (idempotency)
+            // - outbox_events: 1 row inserted (event to publish)
+            // Both atomic!
 
         } catch (BusinessValidationException e) {
             // ============================================================
@@ -149,14 +166,27 @@ public class DocumentUploadedConsumer {
             log.warn("Document REJECTED due to business validation: eventId={}, documentId={}, reason={}", 
                     eventId, aggregateId, e.getMessage());
             
-            // Mark as processed (don't process this event again)
+            // 1. Mark as processed (don't process this event again)
             ProcessedEvent processedEvent = ProcessedEvent.of(eventId, eventType, aggregateId);
             processedEventRepository.save(processedEvent);
             
-            // TODO: Emit DocumentRejected event with reason (next step)
+            // 2. Create DocumentRejected event
+            DocumentRejectedEvent rejectedEvent = DocumentRejectedEvent.create(
+                    aggregateId,
+                    e.getReason(),
+                    "business-validation"  // failedValidationRule
+            );
+            
+            // 3. Save to outbox (will be published by OutboxPublisher)
+            OutboxEvent outboxEvent = createOutboxEvent(rejectedEvent, aggregateId);
+            outboxEventRepository.save(outboxEvent);
+            
+            log.info("Document REJECTED event created: eventId={}, documentId={}, outboxEventId={}", 
+                    eventId, aggregateId, rejectedEvent.eventId());
             
             // DON'T throw exception - we handled it (business logic completed)
             // Message will be ACKed
+            // Transaction commits: processed_events + outbox_events both saved
             
         } catch (IllegalArgumentException e) {
             // Invalid message format - don't retry
@@ -179,20 +209,9 @@ public class DocumentUploadedConsumer {
 
     /**
      * Validate document against business rules.
-     * 
      * Business Rules:
      * 1. File name must be <= 30 characters
      * 2. Content type must be "application/pdf"
-     * 
-     * Error Handling:
-     * - Business rule violation => Throws BusinessValidationException (DON'T RETRY)
-     * - Technical failure => Throws RuntimeException (RETRY)
-     * 
-     * @param documentId The document ID
-     * @param documentName The document name
-     * @param contentType The content type
-     * @throws BusinessValidationException if document violates business rules
-     * @throws RuntimeException if technical error occurs (e.g., external service call fails)
      */
     private void validateDocument(UUID documentId, String documentName, String contentType) {
         log.debug("Validating document: documentId={}, documentName={}, contentType={}", 
@@ -224,4 +243,36 @@ public class DocumentUploadedConsumer {
         log.info("Document VALIDATED: documentId={}, documentName={}", documentId, documentName);
     }
     
+    private OutboxEvent createOutboxEvent(BaseEvent event, UUID aggregateId) {
+        try {
+            String payloadJson = objectMapper.writeValueAsString(event);
+            
+            // Extract eventId and eventType based on event type
+            UUID eventId;
+            String eventType;
+            
+            if (event instanceof DocumentValidatedEvent validatedEvent) {
+                eventId = validatedEvent.eventId();
+                eventType = EventTypes.DOCUMENT_VALIDATED;
+            } else if (event instanceof DocumentRejectedEvent rejectedEvent) {
+                eventId = rejectedEvent.eventId();
+                eventType = EventTypes.DOCUMENT_REJECTED;
+            } else {
+                throw new IllegalArgumentException("Unsupported event type: " + event.getClass());
+            }
+            
+            return OutboxEvent.builder()
+                    .eventId(eventId)
+                    .eventType(eventType)
+                    .aggregateType("Document")
+                    .aggregateId(aggregateId)
+                    .payloadJson(payloadJson)
+                    .status(OutboxEvent.OutboxStatus.PENDING)
+                    .build();
+                    
+        } catch (JsonProcessingException e) {
+            log.error("Failed to serialize event to JSON: event={}", event, e);
+            throw new RuntimeException("Failed to create outbox event", e);
+        }
+    }
 }

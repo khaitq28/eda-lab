@@ -1,5 +1,7 @@
 package com.eda.lab.validation.messaging.exception;
 
+import lombok.Getter;
+
 /**
  * Exception thrown when document fails business validation rules.
  * 
@@ -21,6 +23,7 @@ package com.eda.lab.validation.messaging.exception;
  * - The document itself is invalid
  * - We should emit DocumentRejected event instead
  */
+@Getter
 public class BusinessValidationException extends RuntimeException {
     
     private final String reason;
@@ -34,8 +37,5 @@ public class BusinessValidationException extends RuntimeException {
         super(String.format("Business validation failed: " + reason, args));
         this.reason = String.format(reason, args);
     }
-    
-    public String getReason() {
-        return reason;
-    }
+
 }
