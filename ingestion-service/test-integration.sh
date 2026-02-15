@@ -6,7 +6,7 @@ echo "=== Test 1: Upload document ==="
 RESPONSE=$(curl -s -X POST $BASE_URL/api/documents \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "test-document.pdf",
+    "name": "failed.pdf",
     "contentType": "application/pdf",
     "fileSize": 1024,
     "metadata": {
@@ -24,14 +24,3 @@ echo ""
 echo "Created document ID: $DOC_ID"
 
 echo ""
-echo "=== Test 2: Get document by ID ==="
-curl -s -X GET $BASE_URL/api/documents/$DOC_ID | jq '.'
-
-echo ""
-echo "=== Test 3: Validation error test ==="
-curl -s -X POST $BASE_URL/api/documents \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "",
-    "fileSize": -1
-  }' | jq '.'

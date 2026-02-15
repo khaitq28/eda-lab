@@ -18,24 +18,15 @@ import java.util.UUID;
 @Repository
 public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> {
 
-    /**
-     * Find pending events for publishing.
-     * Ordered by creation time for FIFO processing.
-     * 
-     * This will be used by the outbox publisher background job.
-     * Supports pagination for batch processing.
-     */
+
     @Query("""
         SELECT e FROM OutboxEvent e 
         WHERE e.status = 'PENDING' 
+        AND (e.nextRetryAt IS NULL OR e.nextRetryAt <= :now)
         ORDER BY e.createdAt ASC
         """)
-    List<OutboxEvent> findPendingEvents(Pageable pageable);
+    List<OutboxEvent> findPendingEvents(Instant now, Pageable pageable);
 
-    /**
-     * Find failed events ready for retry.
-     * Used for implementing retry with exponential backoff.
-     */
     @Query("""
         SELECT e FROM OutboxEvent e 
         WHERE e.status = 'FAILED' 
@@ -45,28 +36,12 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
         """)
     List<OutboxEvent> findEventsReadyForRetry(Instant now);
 
-    /**
-     * Find events by aggregate ID.
-     * Useful for debugging and event sourcing scenarios.
-     */
     List<OutboxEvent> findByAggregateIdOrderByCreatedAtAsc(UUID aggregateId);
 
-    /**
-     * Find events by status.
-     * Useful for monitoring.
-     */
     List<OutboxEvent> findByStatus(OutboxStatus status);
 
-    /**
-     * Count events by status.
-     * Useful for metrics dashboards.
-     */
     long countByStatus(OutboxStatus status);
 
-    /**
-     * Find old sent events for archival/cleanup.
-     * Sent events can be archived after a retention period.
-     */
     @Query("""
         SELECT e FROM OutboxEvent e 
         WHERE e.status = 'SENT' 

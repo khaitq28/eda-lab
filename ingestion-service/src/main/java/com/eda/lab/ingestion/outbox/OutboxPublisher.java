@@ -1,9 +1,11 @@
 package com.eda.lab.ingestion.outbox;
 
+import com.eda.lab.common.event.DocumentUploadedEvent;
 import com.eda.lab.ingestion.config.OutboxProperties;
 import com.eda.lab.ingestion.config.RabbitMQConfig;
 import com.eda.lab.ingestion.domain.entity.OutboxEvent;
 import com.eda.lab.ingestion.domain.repository.OutboxEventRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.Message;
@@ -83,7 +85,7 @@ public class OutboxPublisher {
         try {
             // Fetch batch of pending events
             Pageable pageable = PageRequest.of(0, properties.getBatchSize());
-            List<OutboxEvent> pendingEvents = outboxEventRepository.findPendingEvents(pageable);
+            List<OutboxEvent> pendingEvents = outboxEventRepository.findPendingEvents(Instant.now(), pageable);
 
             if (pendingEvents.isEmpty()) {
                 log.trace("No pending outbox events to publish");
@@ -114,6 +116,9 @@ public class OutboxPublisher {
         }
     }
 
+
+    private final ObjectMapper objectMapper;
+
     /**
      * Publish a single outbox event to RabbitMQ.
      * 
@@ -130,6 +135,13 @@ public class OutboxPublisher {
 
             // Build RabbitMQ message
             Message message = buildMessage(outboxEvent);
+
+            if (outboxEvent.getPayload() != null) {
+                DocumentUploadedEvent event = objectMapper.readValue(outboxEvent.getPayload(), DocumentUploadedEvent.class);
+                if (event.documentName().equalsIgnoreCase("failed.pdf")) {
+                    throw new RuntimeException("Simulated publish failure for testing retry logic");
+                }
+            }
 
             // Publish to exchange with routing key
             rabbitTemplate.send(

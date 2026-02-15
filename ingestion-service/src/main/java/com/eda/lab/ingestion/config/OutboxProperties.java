@@ -31,7 +31,7 @@ public class OutboxProperties {
      * Maximum number of retry attempts before marking event as FAILED.
      * Default: 10
      */
-    private int maxRetries = 10;
+    private int maxRetries = 5;
 
     /**
      * Initial retry delay (exponential backoff starts here).

@@ -59,9 +59,10 @@ public class OutboxPublisher {
     @Scheduled(fixedDelay = 2000)
     public void publishPendingEvents() {
         try {
-            // Fetch batch of pending events
+            // Fetch batch of pending events (only those ready to publish)
             Pageable pageable = PageRequest.of(0, BATCH_SIZE);
-            List<OutboxEvent> pendingEvents = outboxEventRepository.findPendingEvents(pageable);
+            Instant now = Instant.now();
+            List<OutboxEvent> pendingEvents = outboxEventRepository.findPendingEvents(now, pageable);
 
             if (pendingEvents.isEmpty()) {
                 log.trace("No pending outbox events to publish");

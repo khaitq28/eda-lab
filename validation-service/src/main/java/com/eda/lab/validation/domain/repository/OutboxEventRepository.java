@@ -42,17 +42,20 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
 
     /**
      * Find pending events ready to publish.
+     * Only returns events where nextRetryAt has passed (or is null).
      * Orders by creation time for FIFO processing.
      * 
+     * @param now Current timestamp (to check if retry time has arrived)
      * @param pageable Pagination (typically PageRequest.of(0, batchSize))
-     * @return List of pending events
+     * @return List of pending events ready to publish
      */
     @Query("""
         SELECT e FROM OutboxEvent e 
         WHERE e.status = 'PENDING' 
+        AND (e.nextRetryAt IS NULL OR e.nextRetryAt <= :now)
         ORDER BY e.createdAt ASC
         """)
-    List<OutboxEvent> findPendingEvents(Pageable pageable);
+    List<OutboxEvent> findPendingEvents(Instant now, Pageable pageable);
 
     /**
      * Find failed events ready for retry.
