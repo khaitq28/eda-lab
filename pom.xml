@@ -29,6 +29,7 @@
         <module>validation-service</module>
         <module>enrichment-service</module>
         <module>audit-service</module>
+        <module>notification-service</module>
     </modules>
 
     <build>

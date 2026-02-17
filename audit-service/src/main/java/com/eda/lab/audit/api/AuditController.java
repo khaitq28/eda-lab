@@ -48,14 +48,15 @@ public class AuditController {
     public ResponseEntity<List<AuditLogResponse>> getAuditLogsByDocument(
             @RequestParam("documentId") UUID documentId) {
         
-        log.info("GET /audit?documentId={}", documentId);
+        log.info("GET /api/v1/audit?documentId={}", documentId);
         
-        List<AuditLog> auditLogs = auditLogRepository.findByAggregateIdOrderByReceivedAtDesc(documentId);
+        // Sort by received_at ASC to show event flow chronologically
+        List<AuditLog> auditLogs = auditLogRepository.findByAggregateIdOrderByReceivedAtAsc(documentId);
         List<AuditLogResponse> response = auditLogs.stream()
                 .map(AuditLogResponse::from)
                 .collect(Collectors.toList());
         
-        log.info("Found {} audit logs for document {}", response.size(), documentId);
+        log.info("Found {} audit logs for document {} (sorted chronologically)", response.size(), documentId);
         return ResponseEntity.ok(response);
     }
 

@@ -104,10 +104,31 @@ Responsibilities:
   - DocumentEnriched
 - Store an immutable audit log of all events
 - Act as a read model / observer service
+- Provide REST API for querying event history
 
 Key patterns:
 - Event-driven read model
 - Eventually consistent projection
+- Wildcard routing pattern (document.*)
+
+---
+
+### 4.5 Notification Service
+
+Responsibilities:
+- Consume document events that require user notification:
+  - DocumentValidated
+  - DocumentRejected
+  - DocumentEnriched
+- Send notifications to users (email, SMS, push - simulated)
+- Store notification history for audit
+- Be idempotent (avoid duplicate notifications)
+
+Key patterns:
+- Fan-out pattern (multiple services consume same event)
+- Idempotent Consumer
+- Retry with backoff
+- Dead Letter Queue
 
 ---
 
@@ -146,16 +167,19 @@ Event structure guidelines:
 
 | Pattern | Status | Importance | Services | Notes |
 |---------|--------|------------|----------|-------|
-| **Transactional Outbox** | ✅ Implemented | **Critical** | ingestion-service, validation-service | Ensures at-least-once delivery |
-| **Idempotent Consumer** | ✅ Implemented | **Critical** | validation-service | Uses processed_events table |
-| **Retry + Exponential Backoff** | ✅ Implemented | **Critical** | validation-service (consumer), both services (outbox publisher) | 5 retries for consumer, 10 for publisher |
-| **Dead Letter Queue (DLQ)** | ✅ Implemented | **Critical** | validation-service | Routes failed messages after retries |
-| **At-Least-Once Delivery** | ✅ Implemented | **Critical** | All services | Guaranteed by Outbox + Idempotency |
+| **Transactional Outbox** | ✅ Implemented | **Critical** | ingestion, validation, enrichment | Ensures at-least-once delivery |
+| **Idempotent Consumer** | ✅ Implemented | **Critical** | validation, enrichment, audit, notification | Uses processed_events or UNIQUE constraint |
+| **Retry + Exponential Backoff** | ✅ Implemented | **Critical** | All consumers, all outbox publishers | 5 retries for consumers, 10 for publishers |
+| **Dead Letter Queue (DLQ)** | ✅ Implemented | **Critical** | All consumers | Routes failed messages after retries |
+| **At-Least-Once Delivery** | ✅ Implemented | **Critical** | System-wide | Guaranteed by Outbox + Idempotency |
 | **Eventual Consistency** | ✅ Implemented | **Critical** | System-wide | Services update asynchronously |
 | **Business vs Technical Failures** | ✅ Implemented | **High** | validation-service | Business failures don't retry |
+| **Multi-Instance Safety** | ✅ Implemented | **High** | All outbox publishers | SELECT FOR UPDATE SKIP LOCKED |
+| **Fan-out Pattern** | ✅ Implemented | **High** | notification, audit | Multiple services consume same event |
+| **Wildcard Routing** | ✅ Implemented | **Medium** | audit-service | Consumes all document.* events |
 | **Saga Pattern (Compensation)** | ❌ Not Implemented | **High** | - | Future: For rollback scenarios |
 | **Event Sourcing** | ❌ Not Implemented | **Medium** | - | Out of scope for this project |
-| **CQRS** | ❌ Not Implemented | **Medium** | - | Partially: audit-service as read model |
+| **CQRS** | ❌ Partial | **Medium** | audit-service | Read model for event history |
 
 ### 7.1 Transactional Outbox (✅ Implemented)
 
@@ -170,6 +194,7 @@ Event structure guidelines:
 **Implemented in:**
 - ingestion-service: Publishes DocumentUploaded
 - validation-service: Publishes DocumentValidated, DocumentRejected
+- enrichment-service: Publishes DocumentEnriched
 
 **Key Tables:**
 - `outbox_events` (status: PENDING, SENT, FAILED)
@@ -187,6 +212,9 @@ Event structure guidelines:
 
 **Implemented in:**
 - validation-service: Uses processed_events table
+- enrichment-service: Uses processed_events table
+- audit-service: Uses UNIQUE constraint on event_id
+- notification-service: Uses UNIQUE constraint on event_id
 
 **Critical Design:**
 - Check idempotency FIRST (read-only)
@@ -205,25 +233,54 @@ Event structure guidelines:
 - Operators can inspect DLQ and manually reprocess
 
 **Implemented in:**
-- validation-service consumer: Retries technical failures
-- Both outbox publishers: Retry failed publishes
+- All consumers: Retry technical failures (validation, enrichment, audit, notification)
+- All outbox publishers: Retry failed publishes (ingestion, validation, enrichment)
 
 **Key Distinction:**
 - Technical failures: Retry (DB down, network timeout)
 - Business failures: Don't retry (invalid format, validation rules)
 
-### 7.4 Multi-Instance Safety (⚠️ Single Instance Only)
+### 7.4 Multi-Instance Safety (✅ Implemented)
 
-**Current Limitation:**
-- Services assume single instance deployment
-- Multiple instances would cause duplicate processing in Outbox Publisher
+**Implementation:**
+- ✅ All outbox publishers use `SELECT FOR UPDATE SKIP LOCKED`
+- ✅ Each instance locks different rows → no duplicate publishing
+- ✅ Consumers are automatically safe (RabbitMQ + idempotency)
 
-**Future Enhancement (Production):**
-- Use `SELECT FOR UPDATE SKIP LOCKED` for Outbox Publisher
-- Distributed locking (Redis, Database advisory locks)
-- Leader election (only leader publishes)
+**How it works:**
+- PostgreSQL row-level locking prevents duplicate event publishing
+- Each instance processes different events
+- Safe for horizontal scaling
 
 See Section 9 for details.
+
+### 7.5 Fan-out Pattern (✅ Implemented)
+
+**Purpose:** Multiple services consume the same event type.
+
+**Implementation:**
+- DocumentValidated → enrichment-service AND notification-service
+- DocumentRejected → notification-service AND audit-service
+- DocumentEnriched → notification-service AND audit-service
+
+**Benefits:**
+- Decoupled services
+- Independent scaling
+- Easy to add new consumers
+
+### 7.6 Wildcard Routing (✅ Implemented)
+
+**Purpose:** Consume all events matching a pattern.
+
+**Implementation:**
+- audit-service binds to `document.*` wildcard
+- Receives ALL document events automatically
+- No code changes needed for new event types
+
+**Benefits:**
+- Complete audit trail
+- Future-proof (new events auto-captured)
+- Simplified topology
 
 ---
 

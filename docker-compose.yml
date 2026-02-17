@@ -101,6 +101,25 @@ services:
     networks:
       - eda-network
 
+  postgres-notification:
+    image: postgres:16-alpine
+    container_name: eda-postgres-notification
+    ports:
+      - "5437:5432"
+    environment:
+      POSTGRES_DB: notification_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_notification_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d notification_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - eda-network
+
   # ==========================================================================
   # SERVICES
   # ==========================================================================
@@ -208,6 +227,32 @@ services:
     networks:
       - eda-network
 
+  notification-service:
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    container_name: eda-notification-service
+    ports:
+      - "8085:8085"
+    environment:
+      DB_HOST: postgres-notification
+      DB_PORT: 5432
+      DB_NAME: notification_db
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASSWORD: guest
+      SERVER_PORT: 8085
+    depends_on:
+      postgres-notification:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - eda-network
+
 # ==========================================================================
 # NETWORKS & VOLUMES
 # ==========================================================================
@@ -221,3 +266,4 @@ volumes:
   postgres_validation_data:
   postgres_enrichment_data:
   postgres_audit_data:
+  postgres_notification_data:

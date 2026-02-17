@@ -26,10 +26,18 @@ import java.util.UUID;
 public interface AuditLogRepository extends JpaRepository<AuditLog, UUID> {
 
     /**
-     * Find all audit logs for a specific document, ordered by time.
+     * Find all audit logs for a specific document, ordered by time (chronological).
      * 
      * @param aggregateId Document ID
-     * @return List of audit logs for this document
+     * @return List of audit logs for this document (oldest first)
+     */
+    List<AuditLog> findByAggregateIdOrderByReceivedAtAsc(UUID aggregateId);
+
+    /**
+     * Find all audit logs for a specific document, ordered by time (reverse chronological).
+     * 
+     * @param aggregateId Document ID
+     * @return List of audit logs for this document (newest first)
      */
     List<AuditLog> findByAggregateIdOrderByReceivedAtDesc(UUID aggregateId);
 
