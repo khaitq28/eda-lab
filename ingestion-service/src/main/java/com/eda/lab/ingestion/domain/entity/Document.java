@@ -50,6 +50,12 @@ public class Document {
     @Column(columnDefinition = "jsonb")
     private Map<String, Object> metadata;
 
+    /**
+     * Correlation ID for tracing requests across services.
+     */
+    @Column(name = "correlation_id")
+    private String correlationId;
+
     // Audit fields
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

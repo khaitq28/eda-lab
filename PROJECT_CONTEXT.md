@@ -252,7 +252,7 @@ Event structure guidelines:
 - Each instance processes different events
 - Safe for horizontal scaling
 
-See Section 9 for details.
+See Section 10 for details.
 
 ### 7.5 Fan-out Pattern (✅ Implemented)
 
@@ -284,7 +284,273 @@ See Section 9 for details.
 
 ---
 
-## 8. Lessons Learned
+## 8. Observability and Traceability
+
+### 8.1 Overview
+
+Full observability implementation for distributed tracing and structured logging across all microservices.
+
+**Status:** ✅ **Fully Implemented**
+
+**Key Components:**
+- ✅ JSON structured logging to STDOUT
+- ✅ Correlation ID propagation across all services
+- ✅ MDC (Mapped Diagnostic Context) for automatic context propagation
+- ✅ Consistent logging conventions
+- ✅ Ready for log aggregation (ELK + Filebeat - to be added)
+
+### 8.2 JSON Structured Logging
+
+**Purpose:** Machine-readable logs for log aggregation tools (Kibana, Datadog, Splunk, CloudWatch).
+
+**Implementation:**
+- Uses `logstash-logback-encoder` for JSON output
+- One JSON object per log line
+- Includes standard fields: `timestamp`, `level`, `logger`, `message`, `service`
+- Includes MDC fields: `correlationId`, `eventId`, `documentId`, `routingKey`, `eventType`
+
+**Example log output:**
+```json
+{
+  "@timestamp": "2026-02-17T23:30:08.197+0000",
+  "message": "EVENT_RECEIVED",
+  "logger_name": "com.eda.lab.validation.messaging.consumer.DocumentUploadedConsumer",
+  "level": "INFO",
+  "eventId": "9b25f391-98bd-4583-8f24-bf3ba2dcc878",
+  "correlationId": "test-correlation-1771371006",
+  "documentId": "b4fa8fc2-5ded-402a-b2e0-e38f817074c0",
+  "eventType": "DocumentUploaded",
+  "routingKey": "document.uploaded",
+  "service": "validation-service"
+}
+```
+
+**Implemented in:** All 5 services (ingestion, validation, enrichment, audit, notification)
+
+### 8.3 Correlation ID Pattern
+
+**Purpose:** Trace a single request or document flow through all services in the distributed system.
+
+**How it works:**
+
+```
+POST /documents (X-Correlation-Id header)
+    ↓
+ingestion-service (generates if missing, persists in DB)
+    ↓ RabbitMQ message headers + payload
+validation-service (extracts from headers, includes in outbound events)
+    ↓ RabbitMQ message headers + payload
+enrichment-service (extracts from headers, includes in outbound events)
+    ↓ RabbitMQ message headers + payload
+audit-service (extracts from headers, stores in DB)
+notification-service (extracts from headers, stores in DB)
+```
+
+**Implementation Details:**
+
+| Service | Correlation ID Handling |
+|---------|------------------------|
+| **ingestion-service** | - Accepts optional `X-Correlation-Id` header<br>- Generates UUID if missing<br>- Persists in `documents.correlation_id`<br>- Includes in `DocumentUploadedEvent` payload<br>- Sets in RabbitMQ message headers |
+| **validation-service** | - Extracts from MDC (set by `MessageMdcContext`)<br>- Includes in `DocumentValidated` / `DocumentRejected` payload<br>- Sets in RabbitMQ message headers via OutboxPublisher |
+| **enrichment-service** | - Extracts from MDC<br>- Includes in `DocumentEnriched` payload<br>- Sets in RabbitMQ message headers via OutboxPublisher |
+| **audit-service** | - Extracts from MDC<br>- Persists in `audit_log.correlation_id` |
+| **notification-service** | - Extracts from MDC<br>- Persists in `notification_history.correlation_id` |
+
+**Benefits:**
+- ✅ End-to-end tracing of document lifecycle
+- ✅ Debug issues by finding all logs for a single correlation ID
+- ✅ Identify bottlenecks or failures in the event flow
+- ✅ Production-ready for distributed tracing tools
+
+### 8.4 MDC (Mapped Diagnostic Context)
+
+**Purpose:** Automatically include contextual information in every log statement without manual passing.
+
+**How it works:**
+- Thread-local storage for log context
+- Set once at the entry point (REST request or RabbitMQ message)
+- All logs in that thread include the context automatically
+- Cleared after processing completes
+
+**Implementation:**
+
+**For REST requests (ingestion-service):**
+```java
+@Component
+public class RequestMdcInterceptor implements HandlerInterceptor {
+    @Override
+    public boolean preHandle(HttpServletRequest request, ...) {
+        String correlationId = request.getHeader("X-Correlation-Id");
+        if (correlationId == null) {
+            correlationId = UUID.randomUUID().toString();
+        }
+        MDC.put(MdcKeys.CORRELATION_ID, correlationId);
+        return true;
+    }
+    
+    @Override
+    public void afterCompletion(...) {
+        MDC.remove(MdcKeys.CORRELATION_ID);
+    }
+}
+```
+
+**For RabbitMQ consumers (all consumer services):**
+```java
+try (var mdc = MessageMdcContext.of(message.getMessageProperties())) {
+    // All logs in this block include correlationId, eventId, documentId, etc.
+    log.info("EVENT_RECEIVED");
+    // ... processing ...
+    log.info("EVENT_PROCESSED");
+}
+// MDC automatically cleared here (AutoCloseable)
+```
+
+**Key Classes:**
+- `MdcKeys`: Centralized constants for MDC keys
+- `MessageMdcContext`: AutoCloseable utility for RabbitMQ message context
+- `RequestMdcInterceptor`: Spring MVC interceptor for REST requests
+
+### 8.5 Logging Conventions
+
+**Consistent log messages across all services for easier monitoring:**
+
+| Event | Log Level | Message | Context |
+|-------|-----------|---------|---------|
+| Event received | INFO | `EVENT_RECEIVED` | eventType, routingKey, eventId, correlationId, documentId |
+| Event processing | DEBUG | `EVENT_PROCESSING` | eventType, correlationId, documentId |
+| Event processed | INFO | `EVENT_PROCESSED` | validationResult, outboxEventId, correlationId |
+| Idempotent skip | INFO | `EVENT_SKIPPED_IDEMPOTENT` | eventId, correlationId |
+| Outbox publish success | INFO | `OUTBOX_PUBLISH_SUCCESS` | eventId, aggregateId, correlationId |
+| Outbox publish failed | ERROR | `OUTBOX_PUBLISH_FAIL` | eventId, aggregateId, retryCount, correlationId |
+| Business validation failed | WARN | `BUSINESS_VALIDATION_FAILED` | reason, correlationId, documentId |
+| Technical failure | ERROR | `TECHNICAL_FAILURE` | error message, correlationId |
+| DLQ routing | ERROR | Retry exhausted, sending to DLQ | eventId, correlationId |
+
+### 8.6 Database Persistence
+
+**Correlation ID is persisted in key tables for long-term traceability:**
+
+| Service | Table | Column |
+|---------|-------|--------|
+| ingestion-service | `documents` | `correlation_id VARCHAR(255)` |
+| audit-service | `audit_log` | `correlation_id VARCHAR(255)` |
+| notification-service | `notification_history` | `correlation_id VARCHAR(255)` |
+
+**Indexes created:**
+- `idx_documents_correlation_id` on `documents(correlation_id)`
+- `idx_audit_log_correlation_id` on `audit_log(correlation_id)`
+
+### 8.7 Log Aggregation (Planned)
+
+**Next Step: ELK Stack + Filebeat**
+
+**Architecture (to be implemented):**
+```
+Docker Containers (Services)
+    ↓ STDOUT (JSON logs)
+Filebeat (log shipper)
+    ↓
+Elasticsearch (log storage)
+    ↓
+Kibana (visualization & search)
+```
+
+**Planned Implementation:**
+1. Add Filebeat container to `docker-compose.yml`
+2. Configure Filebeat to read Docker container logs
+3. Add Elasticsearch container for log storage
+4. Add Kibana container for web UI and dashboards
+5. Create Kibana dashboards for:
+   - Correlation ID tracing
+   - Event flow visualization
+   - Error rate monitoring
+   - Service health metrics
+
+**Benefits of ELK + Filebeat:**
+- ✅ Centralized log storage
+- ✅ Full-text search across all services
+- ✅ Filter by correlationId, documentId, eventType, service, etc.
+- ✅ Visualize event flows and timing
+- ✅ Alert on errors or anomalies
+- ✅ Production-ready observability stack
+
+**Current State:**
+- ✅ JSON logs ready for consumption
+- ✅ All necessary fields included
+- ⏳ ELK + Filebeat integration (next step)
+
+### 8.8 Testing Observability
+
+**Test script:** `test-observability.sh`
+
+**What it does:**
+1. Uploads a document with a test correlation ID
+2. Waits for event propagation (10 seconds)
+3. Searches Docker logs for the correlation ID across all services
+4. Verifies JSON format
+5. Verifies document ID appears in all relevant services
+
+**Example usage:**
+```bash
+./test-observability.sh
+```
+
+**Expected output:**
+- ✅ Same correlation ID in all services
+- ✅ Document ID traceable across services
+- ✅ JSON formatted logs
+- ✅ Event flow: ingestion → validation → enrichment → audit/notification
+
+**Manual tracing:**
+```bash
+CORRELATION_ID="your-correlation-id-here"
+
+# Trace across all services
+docker logs eda-ingestion-service 2>&1 | grep "$CORRELATION_ID"
+docker logs eda-validation-service 2>&1 | grep "$CORRELATION_ID"
+docker logs eda-enrichment-service 2>&1 | grep "$CORRELATION_ID"
+docker logs eda-audit-service 2>&1 | grep "$CORRELATION_ID"
+docker logs eda-notification-service 2>&1 | grep "$CORRELATION_ID"
+```
+
+### 8.9 Files Modified for Observability
+
+**Common module:**
+- `common/pom.xml` (added logstash-logback-encoder)
+- `common/src/main/java/com/eda/lab/common/observability/MdcKeys.java` (new)
+- `common/src/main/java/com/eda/lab/common/observability/MessageMdcContext.java` (new)
+
+**All services:**
+- `*/pom.xml` (added logstash-logback-encoder)
+- `*/src/main/resources/logback-spring.xml` (new)
+
+**Ingestion service:**
+- `ingestion-service/src/main/resources/db/migration/V4__add_correlation_id_to_documents.sql` (new)
+- `ingestion-service/src/main/java/com/eda/lab/ingestion/config/RequestMdcInterceptor.java` (new)
+- `ingestion-service/src/main/java/com/eda/lab/ingestion/config/WebMvcConfig.java` (new)
+- Updated: `DocumentService`, `OutboxPublisher`, `Document` entity, `DocumentResponse` DTO
+
+**Validation service:**
+- Updated: `DocumentUploadedConsumer`, `OutboxPublisher`
+
+**Enrichment service:**
+- Updated: `DocumentValidatedConsumer`, `OutboxPublisher`
+
+**Audit service:**
+- `audit-service/src/main/resources/db/migration/V2__add_correlation_id_to_audit_log.sql` (new)
+- Updated: `DocumentEventConsumer`, `AuditLog` entity
+
+**Notification service:**
+- `notification-service/src/main/resources/db/migration/V2__add_correlation_id_to_notification_history.sql` (new)
+- Updated: `DocumentEventConsumer`, `NotificationHistory` entity
+
+**Documentation:**
+- `OBSERVABILITY_COMPLETE.md` (comprehensive observability guide)
+
+---
+
+## 9. Lessons Learned
 
 ### 8.1 Critical Bugs Found During Development
 
@@ -312,12 +578,15 @@ See Section 9 for details.
 - ✅ Separate business vs technical exception types
 - ✅ Extensive logging for observability
 - ✅ Configuration externalized to application.yml
+- ✅ JSON structured logging with correlation IDs
+- ✅ MDC for automatic context propagation
+- ✅ Consistent logging conventions across services
 
 ---
 
-## 9. Scalability and Multi-Instance Deployment
+## 10. Scalability and Multi-Instance Deployment
 
-### 9.1 Current State (Single Instance)
+### 10.1 Current State (Single Instance)
 
 **Works correctly with:**
 - ✅ 1 instance of each service
@@ -326,7 +595,7 @@ See Section 9 for details.
 - Only one instance polls outbox_events table
 - Only one instance publishes pending events
 
-### 9.2 Multi-Instance Issues
+### 10.2 Multi-Instance Issues
 
 #### Issue 1: Consumer Side (✅ Safe)
 
@@ -373,7 +642,7 @@ Problem:
 
 **Outbox publisher is NOT SAFE for multiple instances!** ❌
 
-### 9.3 Solutions for Multi-Instance Safety
+### 10.3 Solutions for Multi-Instance Safety
 
 #### Solution 1: Database Locking (Recommended) ✅
 
@@ -471,7 +740,7 @@ public class OutboxPublisher {
 - ❌ Single point of failure (until leader re-election)
 - ❌ Underutilizes instances
 
-### 9.4 Implementation Recommendation
+### 10.4 Implementation Recommendation
 
 **For Production:**
 
@@ -504,7 +773,7 @@ docker compose up --scale validation-service=3
 # - All instances share the load
 ```
 
-### 9.5 Consumer Idempotency (Already Safe) ✅
+### 10.5 Consumer Idempotency (Already Safe) ✅
 
 **Even with multiple instances, idempotency ensures safety:**
 
@@ -527,9 +796,9 @@ Skips processing (idempotent) ✅
 
 ---
 
-## 10. Testing Strategy
+## 11. Testing Strategy
 
-### 10.1 Local Development
+### 11.1 Local Development
 
 - Docker Compose is used to run:
   - RabbitMQ

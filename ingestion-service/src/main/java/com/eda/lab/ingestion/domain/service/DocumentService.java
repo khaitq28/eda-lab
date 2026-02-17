@@ -2,6 +2,7 @@ package com.eda.lab.ingestion.domain.service;
 
 import com.eda.lab.common.event.DocumentUploadedEvent;
 import com.eda.lab.common.event.EventTypes;
+import com.eda.lab.common.observability.MdcKeys;
 import com.eda.lab.ingestion.api.dto.DocumentResponse;
 import com.eda.lab.ingestion.api.dto.UploadDocumentRequest;
 import com.eda.lab.ingestion.domain.entity.Document;
@@ -12,6 +13,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -50,7 +52,10 @@ public class DocumentService {
      */
     @Transactional
     public DocumentResponse uploadDocument(UploadDocumentRequest request) {
-        log.info("Uploading document: {}", request.getName());
+        // Get correlation ID from MDC (set by RequestMdcInterceptor)
+        String correlationId = MDC.get(MdcKeys.CORRELATION_ID);
+        
+        log.info("DOCUMENT_UPLOAD_STARTED");
 
         // 1. Create and save Document entity
         Document document = Document.builder()
@@ -59,12 +64,16 @@ public class DocumentService {
                 .fileSize(request.getFileSize())
                 .status(Document.DocumentStatus.UPLOADED)
                 .metadata(request.getMetadata())
+                .correlationId(correlationId)
                 .createdBy(request.getUploadedBy())
                 .updatedBy(request.getUploadedBy())
                 .build();
 
         document = documentRepository.save(document);
-        log.debug("Document saved with ID: {}", document.getId());
+        
+        // Add document ID to MDC for subsequent logs
+        MDC.put(MdcKeys.DOCUMENT_ID, document.getId().toString());
+        log.debug("DOCUMENT_SAVED");
 
         // 2. Create integration event
         DocumentUploadedEvent event = DocumentUploadedEvent.create(
@@ -75,11 +84,11 @@ public class DocumentService {
         );
 
         // 3. Create and save OutboxEvent in the SAME transaction
-        OutboxEvent outboxEvent = createOutboxEvent(event, document.getId());
+        OutboxEvent outboxEvent = createOutboxEvent(event, document.getId(), correlationId);
         outboxEventRepository.save(outboxEvent);
         
-        log.info("Document uploaded successfully. ID: {}, EventID: {}", 
-                document.getId(), event.eventId());
+        MDC.put(MdcKeys.EVENT_ID, event.eventId().toString());
+        log.info("DOCUMENT_UPLOAD_COMPLETED");
 
         // 4. Return response
         return mapToResponse(document);
@@ -104,11 +113,23 @@ public class DocumentService {
 
     /**
      * Create an OutboxEvent from an integration event.
-     * Converts the event to JSON for storage.
+     * Converts the event to JSON for storage, including correlation ID.
      */
-    private OutboxEvent createOutboxEvent(DocumentUploadedEvent event, UUID aggregateId) {
+    private OutboxEvent createOutboxEvent(DocumentUploadedEvent event, UUID aggregateId, String correlationId) {
         try {
-            String payload = objectMapper.writeValueAsString(event);
+            // Add correlation ID to event payload
+            var eventWithCorrelation = new DocumentUploadedEventWithCorrelation(
+                    event.eventId(),
+                    event.eventType(),
+                    event.aggregateId(),
+                    event.timestamp(),
+                    event.documentName(),
+                    event.contentType(),
+                    event.fileSize(),
+                    correlationId
+            );
+            
+            String payload = objectMapper.writeValueAsString(eventWithCorrelation);
             
             return OutboxEvent.builder()
                     .eventId(event.eventId())
@@ -120,10 +141,24 @@ public class DocumentService {
                     .build();
                     
         } catch (JsonProcessingException e) {
-            log.error("Failed to serialize event to JSON", e);
+            log.error("EVENT_SERIALIZATION_FAILED", e);
             throw new RuntimeException("Failed to create outbox event", e);
         }
     }
+    
+    /**
+     * Internal record to include correlation ID in event payload.
+     */
+    private record DocumentUploadedEventWithCorrelation(
+            UUID eventId,
+            String eventType,
+            UUID aggregateId,
+            Instant timestamp,
+            String documentName,
+            String contentType,
+            Long fileSize,
+            String correlationId
+    ) {}
 
     /**
      * Map Document entity to response DTO.
@@ -136,6 +171,7 @@ public class DocumentService {
                 .fileSize(document.getFileSize())
                 .status(document.getStatus())
                 .metadata(document.getMetadata())
+                .correlationId(document.getCorrelationId())
                 .createdAt(document.getCreatedAt())
                 .updatedAt(document.getUpdatedAt())
                 .createdBy(document.getCreatedBy())

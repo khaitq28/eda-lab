@@ -2,6 +2,7 @@ package com.eda.lab.validation.outbox;
 
 import com.eda.lab.validation.domain.entity.OutboxEvent;
 import com.eda.lab.validation.domain.repository.OutboxEventRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.Message;
@@ -42,6 +43,7 @@ public class OutboxPublisher {
 
     private final OutboxEventRepository outboxEventRepository;
     private final RabbitTemplate rabbitTemplate;
+    private final ObjectMapper objectMapper;
 
     // Configuration (can be externalized to application.yml)
     private static final int BATCH_SIZE = 50;
@@ -117,15 +119,14 @@ public class OutboxPublisher {
             // Mark as sent
             markAsSent(outboxEvent);
 
-            log.info("Successfully published event: eventId={}, eventType={}, aggregateId={}", 
-                    outboxEvent.getEventId(),
-                    outboxEvent.getEventType(),
-                    outboxEvent.getAggregateId());
+            log.info("OUTBOX_PUBLISH_SUCCESS: eventId={}, eventType={}", 
+                    outboxEvent.getEventId(), 
+                    outboxEvent.getEventType());
 
             return true;
 
         } catch (Exception e) {
-            log.error("Failed to publish event: eventId={}, eventType={}, attempt={}", 
+            log.error("OUTBOX_PUBLISH_FAILED: eventId={}, eventType={}, attempt={}", 
                     outboxEvent.getEventId(),
                     outboxEvent.getEventType(),
                     outboxEvent.getRetryCount() + 1, 
@@ -156,6 +157,13 @@ public class OutboxPublisher {
         properties.setHeader("aggregateId", outboxEvent.getAggregateId().toString());
         properties.setHeader("publishedAt", Instant.now().toString());
         
+        // Extract and propagate correlation ID from payload
+        String correlationId = extractCorrelationId(outboxEvent.getPayloadJson());
+        if (correlationId != null) {
+            properties.setHeader("correlationId", correlationId);
+            properties.setCorrelationId(correlationId);
+        }
+        
         // Timestamp
         properties.setTimestamp(java.util.Date.from(Instant.now()));
 
@@ -164,6 +172,21 @@ public class OutboxPublisher {
                 .withBody(outboxEvent.getPayloadJson().getBytes())
                 .andProperties(properties)
                 .build();
+    }
+    
+    /**
+     * Extract correlation ID from event payload JSON.
+     */
+    private String extractCorrelationId(String payloadJson) {
+        try {
+            var jsonNode = objectMapper.readTree(payloadJson);
+            if (jsonNode.has("correlationId")) {
+                return jsonNode.get("correlationId").asText();
+            }
+        } catch (Exception e) {
+            log.warn("Failed to extract correlationId from payload", e);
+        }
+        return null;
     }
 
     /**

@@ -281,7 +281,7 @@ cd ingestion-service
 
 ### 3. Upload Document
 ```bash
-curl -X POST http://localhost:8081/api/documents \
+curl -X POST http://localhost:8081/api/v1/documents \
   -H "Content-Type: application/json" \
   -d '{
     "name": "test-document.pdf",
@@ -302,7 +302,7 @@ SELECT * FROM outbox_events;
 
 ### 5. Get Document
 ```bash
-curl http://localhost:8081/api/documents/{id}
+curl http://localhost:8081/api/v1/documents/{id}
 ```
 
 ---

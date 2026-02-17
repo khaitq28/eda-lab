@@ -2,6 +2,7 @@ package com.eda.lab.enrichment.outbox;
 
 import com.eda.lab.enrichment.domain.entity.OutboxEvent;
 import com.eda.lab.enrichment.domain.repository.OutboxEventRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.core.Message;
@@ -44,6 +45,7 @@ public class OutboxPublisher {
 
     private final OutboxEventRepository outboxEventRepository;
     private final RabbitTemplate rabbitTemplate;
+    private final ObjectMapper objectMapper;
 
     // Configuration (can be externalized to application.yml)
     private static final int BATCH_SIZE = 50;
@@ -94,15 +96,25 @@ public class OutboxPublisher {
             // Determine routing key based on event type
             String routingKey = getRoutingKey(event.getEventType());
 
+            // Extract correlation ID from payload
+            String correlationId = extractCorrelationId(event.getPayloadJson());
+            
             // Build message with properties
-            Message message = MessageBuilder.withBody(event.getPayloadJson().getBytes())
+            var builder = MessageBuilder.withBody(event.getPayloadJson().getBytes())
                     .setContentType(MessageProperties.CONTENT_TYPE_JSON)
                     .setMessageId(event.getEventId().toString())
                     .setHeader("eventType", event.getEventType())
                     .setHeader("aggregateId", event.getAggregateId().toString())
                     .setHeader("aggregateType", event.getAggregateType())
-                    .setTimestamp(java.util.Date.from(event.getCreatedAt()))
-                    .build();
+                    .setTimestamp(java.util.Date.from(event.getCreatedAt()));
+            
+            // Add correlation ID if present
+            if (correlationId != null) {
+                builder.setHeader("correlationId", correlationId);
+                builder.setCorrelationId(correlationId);
+            }
+            
+            Message message = builder.build();
 
             // Publish to RabbitMQ
             rabbitTemplate.send(EXCHANGE, routingKey, message);
@@ -111,8 +123,8 @@ public class OutboxPublisher {
             event.markAsSent();
             outboxEventRepository.save(event);
 
-            log.info("Successfully published event: eventId={}, eventType={}, aggregateId={}", 
-                    event.getEventId(), event.getEventType(), event.getAggregateId());
+            log.info("OUTBOX_PUBLISH_SUCCESS: eventId={}, eventType={}", 
+                    event.getEventId(), event.getEventType());
 
         } catch (Exception e) {
             handlePublishFailure(event, e);
@@ -127,7 +139,7 @@ public class OutboxPublisher {
      */
     @Transactional
     protected void handlePublishFailure(OutboxEvent event, Exception error) {
-        log.error("Failed to publish event: eventId={}, eventType={}, retryCount={}, error={}", 
+        log.error("OUTBOX_PUBLISH_FAILED: eventId={}, eventType={}, retryCount={}, error={}", 
                 event.getEventId(), event.getEventType(), event.getRetryCount(), error.getMessage());
 
         if (event.getRetryCount() >= MAX_RETRIES) {
@@ -164,5 +176,20 @@ public class OutboxPublisher {
                 yield "document.unknown";
             }
         };
+    }
+    
+    /**
+     * Extract correlation ID from event payload JSON.
+     */
+    private String extractCorrelationId(String payloadJson) {
+        try {
+            var jsonNode = objectMapper.readTree(payloadJson);
+            if (jsonNode.has("correlationId")) {
+                return jsonNode.get("correlationId").asText();
+            }
+        } catch (Exception e) {
+            log.warn("Failed to extract correlationId from payload", e);
+        }
+        return null;
     }
 }

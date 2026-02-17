@@ -18,7 +18,7 @@ import java.util.UUID;
  * Exposes endpoints for uploading and retrieving documents.
  */
 @RestController
-@RequestMapping("/api/documents")
+@RequestMapping("/api/v1/documents")
 @RequiredArgsConstructor
 @Slf4j
 public class DocumentController {

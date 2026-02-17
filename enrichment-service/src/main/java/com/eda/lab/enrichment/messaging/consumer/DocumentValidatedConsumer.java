@@ -2,6 +2,7 @@ package com.eda.lab.enrichment.messaging.consumer;
 
 import com.eda.lab.common.event.DocumentEnrichedEvent;
 import com.eda.lab.common.event.DocumentValidatedEvent;
+import com.eda.lab.common.observability.MessageMdcContext;
 import com.eda.lab.enrichment.config.RabbitMQConfig;
 import com.eda.lab.enrichment.domain.entity.OutboxEvent;
 import com.eda.lab.enrichment.domain.entity.ProcessedEvent;
@@ -64,20 +65,26 @@ public class DocumentValidatedConsumer {
     @RabbitListener(queues = RabbitMQConfig.MAIN_QUEUE)
     @Transactional
     public void handleDocumentValidated(Message message) {
+        try (MessageMdcContext mdcContext = new MessageMdcContext(message, objectMapper)) {
+            processMessage(message);
+        }
+    }
+    
+    private void processMessage(Message message) {
         try {
             // Extract eventId from message properties (required for idempotency)
             String messageId = message.getMessageProperties().getMessageId();
             if (messageId == null || messageId.isBlank()) {
-                log.error("Message received without messageId, cannot ensure idempotency. Rejecting message.");
+                log.error("EVENT_INVALID: Message received without messageId");
                 throw new IllegalArgumentException("messageId is required for idempotency");
             }
 
             UUID eventId = UUID.fromString(messageId);
-            log.info("Received DocumentValidated event: eventId={}", eventId);
+            log.info("EVENT_RECEIVED");
 
             // Idempotency check: Skip if already processed
             if (processedEventRepository.existsById(eventId)) {
-                log.info("Event {} already processed. Skipping (idempotent).", eventId);
+                log.info("EVENT_SKIPPED_IDEMPOTENT");
                 return; // ACK and skip
             }
 
@@ -86,7 +93,7 @@ public class DocumentValidatedConsumer {
             DocumentValidatedEvent event = objectMapper.readValue(messageBody, DocumentValidatedEvent.class);
             UUID documentId = event.aggregateId();
 
-            log.info("Processing DocumentValidated event: eventId={}, documentId={}", eventId, documentId);
+            log.debug("EVENT_PROCESSING");
 
             // Perform enrichment (simulated)
             enrichDocument(documentId);
@@ -99,6 +106,9 @@ public class DocumentValidatedConsumer {
             );
             processedEventRepository.save(processedEvent);
 
+            // Extract correlation ID from incoming message
+            String correlationId = extractCorrelationId(messageBody);
+            
             // Create DocumentEnriched event in outbox (same transaction)
             DocumentEnrichedEvent enrichedEvent = new DocumentEnrichedEvent(
                     UUID.randomUUID(),
@@ -108,22 +118,34 @@ public class DocumentValidatedConsumer {
                     Instant.now()
             );
 
-            OutboxEvent outboxEvent = createOutboxEvent(enrichedEvent);
+            OutboxEvent outboxEvent = createOutboxEvent(enrichedEvent, correlationId);
             outboxEventRepository.save(outboxEvent);
 
-            log.info("Document ENRICHED: documentId={}, eventId={}, outboxEventId={}", 
-                    documentId, eventId, outboxEvent.getEventId());
+            log.info("EVENT_PROCESSED: outboxEventId={}", outboxEvent.getEventId());
 
         } catch (IllegalArgumentException e) {
-            // Missing messageId or invalid UUID → technical failure
-            log.error("Invalid message format: {}", e.getMessage(), e);
+            log.error("EVENT_PARSE_FAILED: error={}", e.getMessage(), e);
             throw new RuntimeException("Invalid message format", e); // Trigger retry/DLQ
             
         } catch (Exception e) {
-            // Any other exception (JSON parse, DB error) → technical failure
-            log.error("Failed to process DocumentValidated event: {}", e.getMessage(), e);
+            log.error("TECHNICAL_FAILURE: (will retry if attempts remain)", e);
             throw new RuntimeException("Failed to process event", e); // Trigger retry/DLQ
         }
+    }
+    
+    /**
+     * Extract correlation ID from event payload.
+     */
+    private String extractCorrelationId(String payloadJson) {
+        try {
+            var jsonNode = objectMapper.readTree(payloadJson);
+            if (jsonNode.has("correlationId")) {
+                return jsonNode.get("correlationId").asText();
+            }
+        } catch (Exception e) {
+            log.debug("Could not extract correlationId from payload");
+        }
+        return null;
     }
 
     /**
@@ -148,14 +170,25 @@ public class DocumentValidatedConsumer {
     }
 
     /**
-     * Create an outbox event for DocumentEnriched.
+     * Create an outbox event for DocumentEnriched with correlation ID.
      * 
      * @param event DocumentEnriched event
+     * @param correlationId Correlation ID to propagate
      * @return OutboxEvent ready to be saved
      */
-    private OutboxEvent createOutboxEvent(DocumentEnrichedEvent event) {
+    private OutboxEvent createOutboxEvent(DocumentEnrichedEvent event, String correlationId) {
         try {
-            String payloadJson = objectMapper.writeValueAsString(event);
+            // Create enriched payload with correlation ID
+            var eventWithCorrelation = new DocumentEnrichedEventWithCorrelation(
+                    event.eventId(),
+                    event.aggregateId(),
+                    event.timestamp(),
+                    event.enrichmentType(),
+                    event.enrichedAt(),
+                    correlationId
+            );
+            
+            String payloadJson = objectMapper.writeValueAsString(eventWithCorrelation);
 
             OutboxEvent outboxEvent = new OutboxEvent();
             outboxEvent.setId(UUID.randomUUID());
@@ -171,8 +204,20 @@ public class DocumentValidatedConsumer {
             return outboxEvent;
             
         } catch (Exception e) {
-            log.error("Failed to serialize event to JSON: {}", e.getMessage(), e);
+            log.error("EVENT_SERIALIZATION_FAILED", e);
             throw new RuntimeException("Failed to create outbox event", e);
         }
     }
+    
+    /**
+     * Internal record to include correlation ID in event payload.
+     */
+    private record DocumentEnrichedEventWithCorrelation(
+            UUID eventId,
+            UUID aggregateId,
+            Instant timestamp,
+            String enrichmentType,
+            Instant enrichedAt,
+            String correlationId
+    ) {}
 }

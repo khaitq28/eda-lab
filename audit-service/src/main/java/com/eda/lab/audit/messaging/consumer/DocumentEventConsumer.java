@@ -3,6 +3,7 @@ package com.eda.lab.audit.messaging.consumer;
 import com.eda.lab.audit.config.RabbitMQConfig;
 import com.eda.lab.audit.domain.entity.AuditLog;
 import com.eda.lab.audit.domain.repository.AuditLogRepository;
+import com.eda.lab.common.observability.MessageMdcContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -65,6 +66,12 @@ public class DocumentEventConsumer {
     @RabbitListener(queues = RabbitMQConfig.AUDIT_QUEUE)
     @Transactional
     public void handleDocumentEvent(Message message) {
+        try (MessageMdcContext mdcContext = new MessageMdcContext(message, objectMapper)) {
+            processMessage(message);
+        }
+    }
+    
+    private void processMessage(Message message) {
         try {
             // Extract message properties
             MessageProperties props = message.getMessageProperties();
@@ -73,16 +80,16 @@ public class DocumentEventConsumer {
             // Extract eventId from messageId (required for idempotency)
             String messageId = props.getMessageId();
             if (messageId == null || messageId.isBlank()) {
-                log.error("Message received without messageId. RoutingKey: {}. Rejecting message.", routingKey);
+                log.error("EVENT_INVALID: Message received without messageId");
                 throw new IllegalArgumentException("messageId is required for audit logging");
             }
 
             UUID eventId = UUID.fromString(messageId);
-            log.debug("Received event: eventId={}, routingKey={}", eventId, routingKey);
+            log.info("EVENT_RECEIVED");
 
             // Check if already audited (idempotency)
             if (auditLogRepository.existsByEventId(eventId)) {
-                log.info("Event {} already audited. Skipping (idempotent). RoutingKey: {}", eventId, routingKey);
+                log.info("EVENT_SKIPPED_IDEMPOTENT");
                 return; // ACK and skip
             }
 
@@ -95,8 +102,7 @@ public class DocumentEventConsumer {
             String aggregateType = extractAggregateType(eventJson, "Document");
             String correlationId = props.getCorrelationId();
 
-            log.info("Auditing event: eventId={}, eventType={}, aggregateId={}, routingKey={}", 
-                    eventId, eventType, aggregateId, routingKey);
+            log.debug("EVENT_PROCESSING");
 
             // Create and save audit log
             AuditLog auditLog = new AuditLog(
@@ -112,26 +118,23 @@ public class DocumentEventConsumer {
 
             try {
                 auditLogRepository.save(auditLog);
-                log.info("Event audited successfully: eventId={}, eventType={}, aggregateId={}", 
-                        eventId, eventType, aggregateId);
+                log.info("EVENT_PROCESSED");
                 
             } catch (DataIntegrityViolationException e) {
                 // Duplicate event_id (race condition) - treat as idempotent
                 if (e.getMessage() != null && e.getMessage().contains("unique_event_id")) {
-                    log.info("Event {} already audited (race condition). Skipping (idempotent).", eventId);
+                    log.info("EVENT_SKIPPED_IDEMPOTENT");
                     return; // ACK and skip
                 }
                 throw e; // Other DB constraint violation - retry
             }
 
         } catch (IllegalArgumentException e) {
-            // Missing messageId or invalid format → technical failure
-            log.error("Invalid message format: {}", e.getMessage(), e);
+            log.error("EVENT_PARSE_FAILED: error={}", e.getMessage(), e);
             throw new RuntimeException("Invalid message format", e); // Trigger retry/DLQ
             
         } catch (Exception e) {
-            // Any other exception (JSON parse, DB error) → technical failure
-            log.error("Failed to audit event: {}", e.getMessage(), e);
+            log.error("TECHNICAL_FAILURE: (will retry if attempts remain)", e);
             throw new RuntimeException("Failed to audit event", e); // Trigger retry/DLQ
         }
     }

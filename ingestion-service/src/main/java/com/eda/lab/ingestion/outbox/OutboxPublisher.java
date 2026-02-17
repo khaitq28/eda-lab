@@ -142,14 +142,14 @@ public class OutboxPublisher {
             // Mark as sent
             markAsSent(outboxEvent);
 
-            log.info("Successfully published event: eventId={}, aggregateId={}", 
+            log.info("OUTBOX_PUBLISH_SUCCESS: eventId={}, aggregateId={}", 
                     outboxEvent.getEventId(), 
                     outboxEvent.getAggregateId());
 
             return true;
 
         } catch (Exception e) {
-            log.error("Failed to publish event: eventId={}, aggregateId={}, attempt={}", 
+            log.error("OUTBOX_PUBLISH_FAILED: eventId={}, aggregateId={}, attempt={}", 
                     outboxEvent.getEventId(), 
                     outboxEvent.getAggregateId(), 
                     outboxEvent.getRetryCount() + 1, 
@@ -181,6 +181,13 @@ public class OutboxPublisher {
         properties.setHeader("aggregateId", outboxEvent.getAggregateId().toString());
         properties.setHeader("publishedAt", Instant.now().toString());
         
+        // Extract and propagate correlation ID from payload
+        String correlationId = extractCorrelationId(outboxEvent.getPayload());
+        if (correlationId != null) {
+            properties.setHeader("correlationId", correlationId);
+            properties.setCorrelationId(correlationId);
+        }
+        
         // Timestamp
         properties.setTimestamp(java.util.Date.from(Instant.now()));
 
@@ -189,6 +196,21 @@ public class OutboxPublisher {
                 .withBody(outboxEvent.getPayload().getBytes())
                 .andProperties(properties)
                 .build();
+    }
+    
+    /**
+     * Extract correlation ID from event payload JSON.
+     */
+    private String extractCorrelationId(String payloadJson) {
+        try {
+            var jsonNode = objectMapper.readTree(payloadJson);
+            if (jsonNode.has("correlationId")) {
+                return jsonNode.get("correlationId").asText();
+            }
+        } catch (Exception e) {
+            log.warn("Failed to extract correlationId from payload", e);
+        }
+        return null;
     }
 
     /**

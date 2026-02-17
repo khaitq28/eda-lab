@@ -1,5 +1,6 @@
 package com.eda.lab.notification.messaging.consumer;
 
+import com.eda.lab.common.observability.MessageMdcContext;
 import com.eda.lab.notification.config.RabbitMQConfig;
 import com.eda.lab.notification.domain.entity.NotificationHistory;
 import com.eda.lab.notification.domain.repository.NotificationHistoryRepository;
@@ -56,6 +57,12 @@ public class DocumentEventConsumer {
     @RabbitListener(queues = RabbitMQConfig.NOTIFICATION_QUEUE)
     @Transactional
     public void handleDocumentEvent(Message message) {
+        try (MessageMdcContext mdcContext = new MessageMdcContext(message, objectMapper)) {
+            processMessage(message);
+        }
+    }
+    
+    private void processMessage(Message message) {
         try {
             // Extract message properties
             MessageProperties props = message.getMessageProperties();
@@ -64,17 +71,16 @@ public class DocumentEventConsumer {
             // Extract eventId from messageId (required for idempotency)
             String messageId = props.getMessageId();
             if (messageId == null || messageId.isBlank()) {
-                log.error("Message received without messageId. RoutingKey: {}. Rejecting message.", routingKey);
+                log.error("EVENT_INVALID: Message received without messageId");
                 throw new IllegalArgumentException("messageId is required for notification");
             }
 
             UUID eventId = UUID.fromString(messageId);
-            log.debug("Received notification event: eventId={}, routingKey={}", eventId, routingKey);
+            log.info("EVENT_RECEIVED");
 
             // Check if notification already sent (idempotency)
             if (notificationHistoryRepository.existsByEventId(eventId)) {
-                log.info("Notification for event {} already sent. Skipping (idempotent). RoutingKey: {}", 
-                        eventId, routingKey);
+                log.info("EVENT_SKIPPED_IDEMPOTENT");
                 return; // ACK and skip
             }
 
@@ -85,8 +91,7 @@ public class DocumentEventConsumer {
             String eventType = extractEventType(eventJson, props);
             UUID documentId = extractDocumentId(eventJson);
 
-            log.info("Processing notification: eventId={}, eventType={}, documentId={}, routingKey={}", 
-                    eventId, eventType, documentId, routingKey);
+            log.debug("EVENT_PROCESSING");
 
             // Send notification based on event type
             sendNotification(eventId, eventType, documentId, routingKey, eventJson);
@@ -176,20 +181,23 @@ public class DocumentEventConsumer {
 
             try {
                 notificationHistoryRepository.save(history);
-                log.info("✅ Notification sent successfully: eventId={}, eventType={}, recipient={}", 
-                        eventId, eventType, recipient);
+                log.info("EVENT_PROCESSED: notificationType=EMAIL");
                 
             } catch (DataIntegrityViolationException e) {
                 // Duplicate event_id (race condition) - treat as idempotent
                 if (e.getMessage() != null && e.getMessage().contains("event_id")) {
-                    log.info("Notification for event {} already sent (race condition). Skipping.", eventId);
+                    log.info("EVENT_SKIPPED_IDEMPOTENT");
                     return; // ACK and skip
                 }
                 throw e; // Other DB constraint violation - retry
             }
 
+        } catch (IllegalArgumentException e) {
+            log.error("EVENT_PARSE_FAILED: error={}", e.getMessage(), e);
+            throw new RuntimeException("Invalid message format", e);
+            
         } catch (Exception e) {
-            log.error("Failed to send notification for eventId {}: {}", eventId, e.getMessage(), e);
+            log.error("TECHNICAL_FAILURE: (will retry if attempts remain)", e);
             throw new RuntimeException("Failed to send notification", e);
         }
     }

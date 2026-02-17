@@ -3,7 +3,7 @@
 BASE_URL="http://localhost:8081"
 
 echo "=== Test 1: Upload document ==="
-RESPONSE=$(curl -s -X POST $BASE_URL/api/documents \
+RESPONSE=$(curl -s -X POST $BASE_URL/api/v1/documents \
   -H "Content-Type: application/json" \
   -d '{
     "name": "ok.pdf",

@@ -6,13 +6,6 @@ echo "=========================================="
 echo ""
 echo "This script will DELETE all data from all service databases."
 echo "Tables and schemas will remain intact."
-echo ""
-read -p "Are you sure you want to proceed? (yes/no): " confirmation
-
-if [ "$confirmation" != "yes" ]; then
-    echo "Aborted."
-    exit 0
-fi
 
 echo ""
 echo "Starting database cleanup..."

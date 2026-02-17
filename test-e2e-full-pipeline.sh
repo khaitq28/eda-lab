@@ -24,7 +24,7 @@ echo "Content-Type: application/pdf"
 echo "File Size: ${FILE_SIZE} bytes"
 echo ""
 
-RESPONSE=$(curl -s -X POST $BASE_URL/api/documents \
+RESPONSE=$(curl -s -X POST $BASE_URL/api/v1/documents \
   -H "Content-Type: application/json" \
   -d '{
     "name": "'"${DOC_NAME}"'",

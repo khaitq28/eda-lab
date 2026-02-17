@@ -27,6 +27,7 @@ public class DocumentResponse {
     private Long fileSize;
     private DocumentStatus status;
     private Map<String, Object> metadata;
+    private String correlationId;
 
     @JsonFormat(shape = JsonFormat.Shape.STRING)
     private Instant createdAt;
