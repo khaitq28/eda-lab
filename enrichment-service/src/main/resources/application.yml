@@ -27,6 +27,14 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
+    listener:
+      simple:
+        retry:
+          enabled: true
+          max-attempts: 5
+          initial-interval: 1000
+          multiplier: 2.0
+          max-interval: 10000
 
 server:
   port: ${SERVER_PORT:8083}
@@ -40,7 +48,19 @@ management:
     health:
       show-details: always
 
+# Outbox Publisher Configuration
+outbox:
+  publisher:
+    enabled: true
+    polling-interval: 2000  # Poll every 2 seconds
+    batch-size: 50          # Process 50 events per batch
+    max-retries: 10         # Max retry attempts before marking as FAILED
+    initial-retry-delay: 10 # Initial retry delay in seconds (exponential backoff)
+    max-retry-delay: 3600   # Max retry delay in seconds (1 hour)
+
 logging:
   level:
     com.eda.lab: DEBUG
     org.springframework.amqp: INFO
+    org.springframework.retry: DEBUG
+    org.springframework.transaction: DEBUG

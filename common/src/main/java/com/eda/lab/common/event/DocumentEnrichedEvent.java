@@ -1,40 +1,53 @@
 package com.eda.lab.common.event;
 
-import com.fasterxml.jackson.annotation.JsonFormat;
-
 import java.time.Instant;
-import java.util.Map;
 import java.util.UUID;
 
 /**
- * Event published when a document has been enriched with metadata.
- * Uses Java 21 Record for immutability and conciseness.
+ * Event emitted when a document has been successfully enriched.
  * 
- * Published by: Enrichment Service
- * Consumed by: Audit Service
+ * Enrichment includes:
+ * - Classification
+ * - Metadata extraction
+ * - Content analysis
+ * - Additional processing
+ * 
+ * This event is published by enrichment-service via Transactional Outbox
+ * and consumed by audit-service for event logging.
  */
 public record DocumentEnrichedEvent(
-    UUID eventId,
-    String eventType,
-    UUID aggregateId,
-    @JsonFormat(shape = JsonFormat.Shape.STRING)
-    Instant timestamp,
-    String classification,
-    Map<String, String> extractedMetadata
+        UUID eventId,
+        UUID documentId,
+        Instant enrichedAt,
+        String enrichmentType,
+        Instant timestamp
 ) implements BaseEvent {
 
-    /**
-     * Factory method for creating events with default eventType.
-     */
-    public static DocumentEnrichedEvent create(UUID aggregateId, String classification, 
-                                                Map<String, String> extractedMetadata) {
-        return new DocumentEnrichedEvent(
-            UUID.randomUUID(),
-            EventTypes.DOCUMENT_ENRICHED,
-            aggregateId,
-            Instant.now(),
-            classification,
-            Map.copyOf(extractedMetadata) // Defensive copy for true immutability
-        );
+    public DocumentEnrichedEvent {
+        if (eventId == null) {
+            throw new IllegalArgumentException("eventId cannot be null");
+        }
+        if (documentId == null) {
+            throw new IllegalArgumentException("documentId cannot be null");
+        }
+        if (enrichedAt == null) {
+            throw new IllegalArgumentException("enrichedAt cannot be null");
+        }
+        if (enrichmentType == null || enrichmentType.isBlank()) {
+            throw new IllegalArgumentException("enrichmentType cannot be null or blank");
+        }
+        if (timestamp == null) {
+            throw new IllegalArgumentException("timestamp cannot be null");
+        }
+    }
+
+    @Override
+    public String eventType() {
+        return "DocumentEnriched";
+    }
+
+    @Override
+    public UUID aggregateId() {
+        return documentId;
     }
 }
