@@ -27,6 +27,14 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER:guest}
     password: ${RABBITMQ_PASSWORD:guest}
+    listener:
+      simple:
+        retry:
+          enabled: true
+          max-attempts: 5
+          initial-interval: 1000
+          multiplier: 2.0
+          max-interval: 10000
 
 server:
   port: ${SERVER_PORT:8084}
@@ -44,3 +52,5 @@ logging:
   level:
     com.eda.lab: DEBUG
     org.springframework.amqp: INFO
+    org.springframework.retry: DEBUG
+    org.springframework.transaction: DEBUG

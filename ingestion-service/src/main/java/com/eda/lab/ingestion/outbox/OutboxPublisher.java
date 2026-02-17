@@ -131,14 +131,7 @@ public class OutboxPublisher {
 
             // Build RabbitMQ message
             Message message = buildMessage(outboxEvent);
-
-            if (outboxEvent.getPayload() != null) {
-                DocumentUploadedEvent event = objectMapper.readValue(outboxEvent.getPayload(), DocumentUploadedEvent.class);
-                if (event.documentName().equalsIgnoreCase("failed.pdf")) {
-                    throw new RuntimeException("Simulated publish failure for testing retry logic");
-                }
-            }
-
+            
             // Publish to exchange with routing key
             rabbitTemplate.send(
                     RabbitMQConfig.EXCHANGE_NAME,

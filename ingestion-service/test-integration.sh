@@ -6,7 +6,7 @@ echo "=== Test 1: Upload document ==="
 RESPONSE=$(curl -s -X POST $BASE_URL/api/documents \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "ok.pdf",
+    "name": "failed.pdf",
     "contentType": "application/pdf",
     "fileSize": 1024,
     "metadata": {

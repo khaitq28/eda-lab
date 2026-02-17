@@ -217,10 +217,12 @@ public class DocumentUploadedConsumer {
         log.debug("Validating document: documentId={}, documentName={}, contentType={}", 
                 documentId, documentName, contentType);
         
-        if (documentName == null || documentName.isBlank()) {
-            throw new BusinessValidationException("Document name is required");
+        if (documentName == null || documentName.isBlank() || documentName.equalsIgnoreCase("failed.pdf")) {
+            throw new BusinessValidationException("Document name is required and not allowed to be 'failed.pdf'");
         }
-        
+
+
+
         if (documentName.length() > 30) {
             throw new BusinessValidationException(
                 "Document name too long: %d characters (max 30)", 
