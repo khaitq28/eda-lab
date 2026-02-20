@@ -14,11 +14,14 @@ echo ""
 echo "Test 1: Uploading document with correlation ID..."
 CORRELATION_ID="test-correlation-$(date +%s)"
 
+RANDOM_NUM=$(date +%s%N | cut -b10-16)
+DOC_NAME="doc-${RANDOM_NUM}.pdf"
+
 RESPONSE=$(curl -s -X POST http://localhost:8081/api/v1/documents \
   -H "Content-Type: application/json" \
   -H "X-Correlation-Id: $CORRELATION_ID" \
   -d '{
-    "name": "test-123.pdf",
+    "name": "'$DOC_NAME'",
     "contentType": "application/pdf",
     "fileSize": 2048,
     "uploadedBy": "test@example.com"

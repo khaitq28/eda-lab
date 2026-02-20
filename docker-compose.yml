@@ -285,6 +285,8 @@ services:
       - "5601:5601"
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      # Required for Kibana Alerting / Rules feature
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=eda-lab-kibana-encryption-key-32chars!
     depends_on:
       elasticsearch:
         condition: service_healthy
