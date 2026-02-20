@@ -1,0 +1,62 @@
+# ==========================================================================
+# Filebeat configuration for EDA Lab
+# Collects JSON logs from all application containers
+# Sends to Elasticsearch for Kibana search
+#
+# NOTE: Filebeat 8.x defaults to data streams. We disable that here and use
+# traditional date-based indices (eda-logs-YYYY.MM.DD) for simplicity.
+# ==========================================================================
+
+# --------------------------------------------------------------------------
+# Input: Read Docker container logs
+# --------------------------------------------------------------------------
+filebeat.inputs:
+  - type: container
+    paths:
+      - '/var/lib/docker/containers/*/*.log'
+    # Parse the inner JSON produced by our Spring Boot services
+    processors:
+      - decode_json_fields:
+          fields: ["message"]
+          target: ""
+          overwrite_keys: true
+          add_error_key: true
+
+# --------------------------------------------------------------------------
+# Global processors (applied after input processors)
+# --------------------------------------------------------------------------
+processors:
+  # Add Docker container metadata (container.name, container.image, etc.)
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+
+  # Drop logs from ELK infrastructure containers to avoid recursive logging
+  - drop_event:
+      when:
+        or:
+          - contains:
+              container.name: "elasticsearch"
+          - contains:
+              container.name: "kibana"
+          - contains:
+              container.name: "filebeat"
+
+# --------------------------------------------------------------------------
+# Output: Send logs to Elasticsearch using traditional (non-data-stream) indices
+# --------------------------------------------------------------------------
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  index: "eda-logs-%{+yyyy.MM.dd}"
+
+# --------------------------------------------------------------------------
+# Disable ILM and template auto-setup to avoid data stream conflicts in ES 8.x
+# Elasticsearch will auto-create the index with default settings.
+# --------------------------------------------------------------------------
+setup.ilm.enabled: false
+setup.template.enabled: false
+
+# --------------------------------------------------------------------------
+# Logging (Filebeat's own logs)
+# --------------------------------------------------------------------------
+logging.level: warning
+logging.to_stderr: true

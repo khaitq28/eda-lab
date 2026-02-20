@@ -441,44 +441,76 @@ try (var mdc = MessageMdcContext.of(message.getMessageProperties())) {
 - `idx_documents_correlation_id` on `documents(correlation_id)`
 - `idx_audit_log_correlation_id` on `audit_log(correlation_id)`
 
-### 8.7 Log Aggregation (Planned)
+### 8.7 Log Aggregation — ELK Stack + Filebeat (✅ Implemented)
 
-**Next Step: ELK Stack + Filebeat**
-
-**Architecture (to be implemented):**
+**Architecture:**
 ```
-Docker Containers (Services)
+Docker Containers (5 services + RabbitMQ + PostgreSQL)
     ↓ STDOUT (JSON logs)
-Filebeat (log shipper)
+Filebeat (reads Docker container logs, parses JSON)
     ↓
-Elasticsearch (log storage)
+Elasticsearch (single-node, indexes eda-logs-*)
     ↓
-Kibana (visualization & search)
+Kibana (http://localhost:5601 — search, filter, dashboards)
 ```
 
-**Planned Implementation:**
-1. Add Filebeat container to `docker-compose.yml`
-2. Configure Filebeat to read Docker container logs
-3. Add Elasticsearch container for log storage
-4. Add Kibana container for web UI and dashboards
-5. Create Kibana dashboards for:
-   - Correlation ID tracing
-   - Event flow visualization
-   - Error rate monitoring
-   - Service health metrics
+**Components:**
 
-**Benefits of ELK + Filebeat:**
-- ✅ Centralized log storage
-- ✅ Full-text search across all services
-- ✅ Filter by correlationId, documentId, eventType, service, etc.
-- ✅ Visualize event flows and timing
-- ✅ Alert on errors or anomalies
-- ✅ Production-ready observability stack
+| Component | Image | Purpose | Port |
+|-----------|-------|---------|------|
+| Elasticsearch | `elasticsearch:8.13.4` | Log storage & search engine | 9200 |
+| Kibana | `kibana:8.13.4` | Web UI for searching & visualizing logs | 5601 |
+| Filebeat | `filebeat:8.13.4` | Collects & ships container logs to ES | — |
 
-**Current State:**
-- ✅ JSON logs ready for consumption
-- ✅ All necessary fields included
-- ⏳ ELK + Filebeat integration (next step)
+**Filebeat Configuration (`elk/filebeat.yml`):**
+- Input: `type: container` — reads from `/var/lib/docker/containers/`
+- `decode_json_fields`: parses the JSON log body so fields like `correlationId`, `service`, `level` become searchable ES fields (not plain text)
+- `add_docker_metadata`: adds `container.name`, `container.image.name`
+- `drop_event`: excludes ELK containers themselves (avoid recursive logging)
+- Index pattern: `eda-logs-YYYY.MM.DD` (1 shard, 0 replicas for dev)
+
+**How to Use:**
+
+```bash
+# Start everything (services + ELK)
+docker compose up -d
+
+# Wait ~60s for Kibana to be ready, then open:
+# http://localhost:5601
+
+# In Kibana:
+# 1. Go to Management → Data Views → Create data view
+# 2. Name: "EDA Logs", Index pattern: "eda-logs-*", Timestamp field: @timestamp
+# 3. Go to Discover → select "EDA Logs" data view
+```
+
+**Example Kibana Searches (KQL):**
+```
+correlationId: "test-correlation-123"
+service: "validation-service"
+level: "ERROR"
+documentId: "b4fa8fc2-5ded-402a-b2e0-e38f817074c0"
+message: "EVENT_RECEIVED" and service: "enrichment-service"
+container.name: "eda-ingestion-service"
+```
+
+**Searchable Fields (indexed from JSON logs):**
+
+| Field | Source | Example |
+|-------|--------|---------|
+| `correlationId` | MDC | `test-correlation-123` |
+| `eventId` | MDC | `9b25f391-...` |
+| `documentId` | MDC | `b4fa8fc2-...` |
+| `service` | logback customField | `validation-service` |
+| `level` | logback | `INFO`, `ERROR`, `DEBUG` |
+| `message` | logback | `EVENT_RECEIVED` |
+| `eventType` | MDC | `DocumentUploaded` |
+| `routingKey` | MDC | `document.uploaded` |
+| `container.name` | Docker metadata | `eda-validation-service` |
+
+**Memory Notes:**
+- Elasticsearch heap: 512 MB (`-Xms512m -Xmx512m`)
+- If Docker Desktop runs low on memory, increase in Docker Desktop Settings → Resources → Memory (recommend ≥ 8 GB for full stack)
 
 ### 8.8 Testing Observability
 

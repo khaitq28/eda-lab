@@ -18,7 +18,7 @@ RESPONSE=$(curl -s -X POST http://localhost:8081/api/v1/documents \
   -H "Content-Type: application/json" \
   -H "X-Correlation-Id: $CORRELATION_ID" \
   -d '{
-    "name": "observability-test.pdf",
+    "name": "test-123.pdf",
     "contentType": "application/pdf",
     "fileSize": 2048,
     "uploadedBy": "test@example.com"
