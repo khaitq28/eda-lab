@@ -22,12 +22,13 @@ import java.util.UUID;
  * Lifecycle:
  * 1. PENDING: Created in same transaction as business logic
  * 2. SENT: Successfully published to RabbitMQ
- * 3. FAILED: Max retries exceeded (requires manual intervention)
- * 
+ * 3. FAILED: Max retries exceeded — DLQ semantics: event remains in DB, no automatic retry.
+ *   Operators query FAILED rows, fix root cause, then optionally set status back to PENDING to retry.
+ *
  * Retry Strategy:
  * - Exponential backoff: 10s, 20s, 40s, 80s, 160s, ...
  * - Max retries: 10 (configurable)
- * - After max retries: status = FAILED
+ * - After max retries: status = FAILED (saved to DB; publisher ignores FAILED rows).
  */
 @Entity
 @Table(name = "outbox_events")

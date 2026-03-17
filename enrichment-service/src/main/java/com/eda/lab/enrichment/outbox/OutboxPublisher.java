@@ -19,21 +19,33 @@ import java.util.List;
 
 /**
  * Outbox Publisher - Publishes pending outbox events to RabbitMQ.
- * 
+ *
  * This component implements the "Publisher" part of the Transactional Outbox pattern:
  * 1. Polls for PENDING events from the database
  * 2. Publishes them to RabbitMQ
  * 3. Marks them as SENT on success
  * 4. Implements retry logic with exponential backoff on failure
- * 
+ *
+ * DLQ (Dead Letter Queue) pattern — outbox side:
+ * - Here "DLQ" means: events that cannot be published after max retries are not sent to
+ *   a RabbitMQ queue; they are persisted in the same outbox table with status FAILED.
+ * - On publish failure: we retry with exponential backoff (see handlePublishFailure).
+ * - After max retries: we save the outbox event to the DB with status FAILED
+ *   (markAsPermanentlyFailed + save). The event stays in outbox_events, never goes to RabbitMQ.
+ * - Then what?
+ *   - The publisher stops retrying (findPendingEvents only selects status = 'PENDING').
+ *   - FAILED rows are for manual intervention: operators query them (e.g. by status or last_error),
+ *     fix root cause (e.g. broker/network), then either reset status to PENDING to retry, or
+ *     archive/alert. Monitoring/alerting on count of FAILED events is recommended.
+ *
  * Key Features:
  * - Fixed-delay scheduling (prevents overlapping executions)
  * - Batch processing for efficiency
  * - Exponential backoff for retries
  * - Publishes to doc.events exchange with routing key "document.enriched"
- * 
+ *
  * Concurrency Safety:
- * - ✅ SAFE for multiple instances
+ * - SAFE for multiple instances
  * - Uses SELECT FOR UPDATE SKIP LOCKED in repository query
  * - Each instance locks different rows → no duplicate publishing
  * - PostgreSQL 9.5+ required (SKIP LOCKED support)
@@ -132,32 +144,40 @@ public class OutboxPublisher {
     }
 
     /**
-     * Handle publish failure with retry logic.
-     * 
+     * Handle publish failure with retry logic (DLQ path: retry then FAILED in DB).
+     * <ul>
+     *   <li>Under max retries: increment retry count, set last_error and next_retry_at
+     *       (exponential backoff), save; publisher will pick it up again when next_retry_at has passed.</li>
+     *   <li>At or over max retries: mark as permanently failed (status = FAILED), save to DB.
+     *       Publisher will not pick it up again (only PENDING rows are selected). Operators must
+     *       query FAILED events, fix cause, and optionally set status back to PENDING to retry.</li>
+     * </ul>
+     *
      * @param event Event that failed to publish
      * @param error Exception that occurred
      */
     @Transactional
     protected void handlePublishFailure(OutboxEvent event, Exception error) {
-        log.error("OUTBOX_PUBLISH_FAILED: eventId={}, eventType={}, retryCount={}, error={}", 
+        log.error("OUTBOX_PUBLISH_FAILED: eventId={}, eventType={}, retryCount={}, error={}",
                 event.getEventId(), event.getEventType(), event.getRetryCount(), error.getMessage());
 
         if (event.getRetryCount() >= MAX_RETRIES) {
-            // Max retries exceeded - mark as permanently failed
+            // DLQ: Max retries exceeded — persist as FAILED in DB (outbox "dead letter"); no RabbitMQ DLQ.
             event.markAsPermanentlyFailed(
                     String.format("Max retries (%d) exceeded. Last error: %s", MAX_RETRIES, error.getMessage())
             );
             outboxEventRepository.save(event);
 
-            log.error("Event permanently failed after {} retries: eventId={}, eventType={}", 
+            log.error("Event permanently failed after {} retries: eventId={}, eventType={}. " +
+                    "Event is now FAILED in DB; no automatic retry. Manual intervention or reset to PENDING to retry.",
                     MAX_RETRIES, event.getEventId(), event.getEventType());
         } else {
-            // Schedule retry with exponential backoff
+            // Schedule retry with exponential backoff; status stays PENDING, next run will re-select when next_retry_at <= now.
             event.markAsFailed(error.getMessage(), INITIAL_RETRY_DELAY_SECONDS);
             outboxEventRepository.save(event);
 
             Duration nextRetryIn = Duration.between(Instant.now(), event.getNextRetryAt());
-            log.warn("Event will be retried in {} seconds: eventId={}, retryCount={}", 
+            log.warn("Event will be retried in {} seconds: eventId={}, retryCount={}",
                     nextRetryIn.getSeconds(), event.getEventId(), event.getRetryCount());
         }
     }

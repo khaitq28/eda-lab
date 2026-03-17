@@ -48,20 +48,23 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
     /**
      * Find pending events ready to publish with row-level locking.
      * Uses FOR UPDATE SKIP LOCKED for multi-instance safety.
-     * 
+     *
+     * DLQ: Only PENDING rows are selected. FAILED events (after max retries) are never
+     * picked up again; they remain in DB for manual intervention or reset to PENDING.
+     *
      * How it works:
      * - Each instance locks different rows (SELECT FOR UPDATE)
      * - If row is locked by another instance, SKIP it (SKIP LOCKED)
      * - Prevents duplicate publishing in scaled deployments
-     * 
+     *
      * Example with 3 instances:
      * - Instance 1 locks rows 1-50
      * - Instance 2 tries same rows → SKIPPED (busy)
      * - Instance 2 locks rows 51-100 instead
      * - Instance 3 locks rows 101-150
-     * - Result: Each instance processes different events ✅
-     * 
-     * @param now Current timestamp (to check if retry time has arrived)
+     * - Result: Each instance processes different events
+     *
+     * @param now   Current timestamp (to check if retry time has arrived)
      * @param limit Batch size
      * @return List of pending events (locked by this instance)
      */
